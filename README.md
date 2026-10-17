@@ -1,6 +1,8 @@
 # AstrBot MOTD 查询插件 (`server-motd`)
 
-一个用于查询 Minecraft 服务器状态的 AstrBot 高颜值卡片查询插件。支持 Java 版和基岩版服务器，**兼容 ViaVersion 多版本服务器**，**支持 Velocity 代理子服查询**，并内置**随机二次元壁纸背景与玩家头像网格渲染**。
+一个用于查询 Minecraft 服务器状态的 AstrBot 卡片查询插件。支持 Java 版和基岩版服务器、ViaVersion/Velocity/BungeeCord 版本识别，并内置随机二次元壁纸背景与玩家头像网格渲染。
+
+> **1.7.6 地址访问规则**：默认仅查询公网地址。内网服需由管理员在 AstrBot WebUI 的「允许查询的内网服务器 IP/网段」中添加精确 IP 或 CIDR。白名单对所有获准使用插件的会话生效；图标下载始终拒绝内网地址。
 
 ![插件输出图片效果预览图1](./assets/preview_java.png)
 ![插件输出图片效果预览图2](./assets/preview_bedrock.png)
@@ -11,12 +13,12 @@
 ## 🌟 功能特性
 
 - 🎮 **MOTD 查询**: 实时查询 Minecraft 服务器的 MOTD、在线玩家数、延迟、版本等信息。
-- 🎨 **精美图片渲染**: 基于 HTML/CSS 生成 1280×720 高清状态卡片，支持毛玻璃拟态与像素阴影风格。
+- 🎨 **精美图片渲染**: 基于 HTML/CSS 生成状态卡片：单服/双服为 1280×720，三服为 1280×960，保留现有清晰背景与像素阴影风格。
 - 🖼️ **随机壁纸背景**: 内置后台异步壁纸拉取与压缩缓存池，查询时毫秒级随机抽取背景，零耗时等待。
-- 👤 **在线玩家头像网格**: 支持 4 列网格展示多达 16 位在线玩家皮肤头像（基于 Minotar / MC-Heads）。
+- 👤 **在线玩家头像**: 单服与多服的现行命令入口均准备最多 16 个槽位；样本超过 16 人时为前 15 人及剩余人数。单服可完整展示，多服保留现有卡片限高布局，超出可见区域的槽位可能被裁剪。人数取决于服务器公开的玩家样本（头像基于 Minotar / MC-Heads）。
 - 🔀 **ViaVersion 智能兼容**: 自动识别 ViaVersion 多版本服务端，精准提取并显示客户端支持版本范围（如 `1.8 ~ 1.21.4`）。
-- 🌐 **代理服务器支持**: 支持 Velocity 与 BungeeCord 代理架构，配合 [velostat](https://modrinth.com/plugin/velostat) 可直接查询代理与各子服运行状态。
-- ⚡ **多默认服务器并发**: 支持配置最多三台默认服务器，`/motd` 一键并发查询并自动合并为状态大图。
+- 🌐 **代理版本识别**: 可查询 Velocity/BungeeCord 对外开放的 Java 状态端口并识别版本范围。当前不提供 velostat HTTP API 集成或自动发现子服；已知子服地址可作为普通服务器分别查询。
+- ⚡ **多默认服务器并发**: 支持配置最多三台默认服务器，使用异步 TCP/UDP，`/motd` 并发查询并自动合并为状态大图，查询可及时超时或取消。
 - 💬 **人性化指令体验**: 无需强制加 `/`（直接发 `motd` 即可响应），支持 `motd set1~set3` 与 `motd remove` 动态配置。
 - 🛡️ **双查询引擎**: 默认优先使用稳定高效的 `mcstatus.io` API，支持无缝降级直连查询。
 
@@ -93,6 +95,7 @@ git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_
 | `admin_only_config` | bool | `true` | 仅 AstrBot 管理员可使用 `set`/`remove` 指令修改配置 |
 | `query_timeout` | int | `5` | 服务器查询超时时间（秒） |
 | `use_api` | bool | `true` | 优先通过 `mcstatus.io` API 查询，失败时自动降级直连 |
+| `private_server_allowlist` | list | `[]` | 允许查询的非公网 IP/CIDR；在连接前验证全部 DNS 结果并固定实际连接 IP，不接受域名 |
 | `enable_player_avatars` | bool | `true` | 是否显示在线玩家头像网格 |
 | `render_timeout` | int | `20` | HTML 图片渲染硬超时（秒） |
 
@@ -124,13 +127,26 @@ git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_
 ## 🛠️ 故障排查
 
 1. **发送 `motd` 无响应**：
-   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.7.5`。
+   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.7.6`。
    - 确认发送者或群聊是否符合会话规则。
 2. **卡片图片无法渲染（提示超时或报错）**：
    - 确认宿主环境已安装 Playwright 依赖（`playwright install chromium`）。
    - 可在插件配置中将 `render_timeout` 适当调大（例如 25 秒）。
 3. **玩家头像显示为默认灰色问号**：
    - 正常现象，当服务器为离线模式（盗版服）或第三方皮肤站、玩家 UUID 无法在官方 Mojang/Minotar 解析时，插件会自动显示本地兜底占位图，不影响整体排版。
+
+4. **内网服提示「此地址不允许查询」**：
+   - 在 AstrBot WebUI 插件配置中将该服的精确 IP 加入 `private_server_allowlist`，例如 `192.168.1.10/32`；域名的所有解析结果都必须符合访问规则。
+   - 只开放需要查询的 IP/网段，避免填写 `0.0.0.0/0` 或 `::/0`。组播和未指定地址始终拒绝。
+   - 服务器图标仅接受经过大小和图片格式校验的 PNG/JPEG/WebP；远程图标先在插件端下载，禁止重定向和内网访问，失败时显示占位符。
+
+## 回归验证
+
+```bash
+python -m unittest discover -s tests -v
+```
+
+测试使用本机真实 TCP/UDP 状态端点验证并发、超时、取消和 RakNet 报文，并覆盖地址限制、协议映射及模板上下文。测试用的 AstrBot 接口替身仅隔离框架依赖，不能替代实际 AstrBot/QQ 出图验收。
 
 ---
 

@@ -11,6 +11,7 @@ import re
 import asyncio
 import base64
 import hashlib
+import ipaddress
 import random
 from io import BytesIO
 from pathlib import Path
@@ -34,7 +35,7 @@ JAVA_DEFAULT_PORT = 25565
 BEDROCK_DEFAULT_PORT = 19132
 
 PLUGIN_NAME = "astrbot_plugin_minecraft_motd"
-PLUGIN_VERSION = "1.7.5"
+PLUGIN_VERSION = "1.7.6"
 WALLPAPER_API_BASE = "https://t.alcy.cc/json/"
 WALLPAPER_ALLOWED_HOSTS = {"t.alcy.cc", "tc.alcy.cc"}
 WALLPAPER_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -43,9 +44,11 @@ WALLPAPER_MAX_BYTES = 6 * 1024 * 1024
 AVATAR_ALLOWED_HOSTS = {"mc-heads.net", "www.mc-heads.net", "minotar.net", "www.minotar.net"}
 AVATAR_MAX_BYTES = 256 * 1024
 AVATAR_DISPLAY_LIMIT = 6
+SERVER_ICON_MAX_BYTES = 256 * 1024
+RAKNET_MAGIC = bytes.fromhex("00ffff00fefefefefdfdfdfd12345678")
 
 # ============================================================
-# 协议号 → 版本名 完整映射（2026-06 更新）
+# 协议号 → 版本名映射（2026-10 更新，参考 ViaVersion ProtocolVersion）
 # 格式: protocol: (显示版本, 主版本号)
 # 注: 26.x 起 Minecraft 采用年份.版本的新命名规则
 # ============================================================
@@ -58,14 +61,14 @@ PROTOCOL_VERSION_MAP: Dict[int, Tuple[str, str]] = {
     109:  ("1.9.2", "1.9"),
     110:  ("1.9.3-1.9.4", "1.9"),
     210:  ("1.10.x", "1.10"),
-    315:  ("1.11.x", "1.11"),
-    316:  ("1.11.1", "1.11"),
+    315:  ("1.11", "1.11"),
+    316:  ("1.11.1-1.11.2", "1.11"),
     335:  ("1.12", "1.12"),
     338:  ("1.12.1", "1.12"),
     340:  ("1.12.2", "1.12"),
     393:  ("1.13", "1.13"),
     394:  ("1.13.1", "1.13"),
-    401:  ("1.13.2", "1.13"),
+    404:  ("1.13.2", "1.13"),
     477:  ("1.14", "1.14"),
     480:  ("1.14.1", "1.14"),
     485:  ("1.14.2", "1.14"),
@@ -96,10 +99,12 @@ PROTOCOL_VERSION_MAP: Dict[int, Tuple[str, str]] = {
     769:  ("1.21.4", "1.21"),
     770:  ("1.21.5", "1.21"),
     771:  ("1.21.6", "1.21"),
-    # 注: 1.21.7 复用了 1.21-1.21.1 的协议号 767，已在上方 767 条目中覆盖
-    772:  ("1.21.8", "1.21"),
+    772:  ("1.21.7-1.21.8", "1.21"),
     773:  ("1.21.9-1.21.10", "1.21"),
     774:  ("1.21.11", "1.21"),
+    775:  ("26.1-26.1.2", "26.1"),
+    776:  ("26.2", "26.2"),
+    777:  ("26.3", "26.3"),
 }
 
 # 已知代理/跨版本软件关键词 → 显示名
@@ -133,6 +138,7 @@ _VERSION_TO_PROTOCOL: Dict[str, int] = {}
 
 def _build_version_to_protocol():
     """从 PROTOCOL_VERSION_MAP 构建版本名到协议号的反向映射"""
+    _VERSION_TO_PROTOCOL.clear()
     for proto, (ver_str, _major) in PROTOCOL_VERSION_MAP.items():
         parts = ver_str.split("-")
         start = parts[0]
@@ -154,16 +160,14 @@ def _build_version_to_protocol():
 
         if start_parts == end_parts:
             _VERSION_TO_PROTOCOL[".".join(str(x) for x in start_parts)] = proto
+            if ver_str.endswith(".x"):
+                # 已发布的通配版本补丁范围，避免把未知未来版本映射到旧协议。
+                last_patch = {"1.8.x": 9, "1.10.x": 2}.get(ver_str, 0)
+                for patch in range(last_patch + 1):
+                    _VERSION_TO_PROTOCOL[f"{start_parts[0]}.{start_parts[1]}.{patch}"] = proto
         else:
-            # 范围映射：首尾版本都指向同一个协议号
-            for ver in [
-                ".".join(str(x) for x in start_parts),
-                ".".join(str(x) for x in end_parts),
-            ]:
-                _VERSION_TO_PROTOCOL[ver] = proto
-
-    # 特殊映射：某些版本复用了其他版本的协议号
-    _VERSION_TO_PROTOCOL["1.21.7"] = 767  # 1.21.7 复用了 1.21-1.21.1 的协议号
+            for patch in range(start_parts[2], end_parts[2] + 1):
+                _VERSION_TO_PROTOCOL[f"{start_parts[0]}.{start_parts[1]}.{patch}"] = proto
 
 
 _build_version_to_protocol()
@@ -173,7 +177,8 @@ def _lookup_protocol_from_name(version_name: str) -> Optional[int]:
     """从版本名中提取最高版本号，反查协议号。未找到返回 None。"""
     if not version_name:
         return None
-    matches = _VERSION_RE.findall(version_name)
+    matches = [v for v in _VERSION_RE.findall(version_name)
+               if int(v.split(".")[0]) == 1 or int(v.split(".")[0]) >= 26]
     if not matches:
         return None
     # 取最高版本号
@@ -195,12 +200,108 @@ def _html_escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
-async def query_java_server_api(host: str, port: int = JAVA_DEFAULT_PORT) -> Dict[str, Any]:
+async def _resolve_query_addresses(host: str, port: int, socktype: int, private_server_allowlist=()):
+    """解析一次并验证所有结果；连接仅使用这些 IP，避免 DNS 重绑定。"""
+    if not host or any(c.isspace() or c in "/\\@?#%" for c in host):
+        raise ValueError("无效服务器地址")
+    if not 1 <= int(port) <= 65535:
+        raise ValueError("端口必须在 1-65535 之间")
+    networks = []
+    for entry in private_server_allowlist:
+        try:
+            networks.append(ipaddress.ip_network(str(entry).strip(), strict=False))
+        except ValueError:
+            continue
+    addresses = await asyncio.get_running_loop().getaddrinfo(host, port, type=socktype)
+    if not addresses:
+        raise ValueError("服务器地址没有可用的 IP")
+    for family, _, _, _, sockaddr in addresses:
+        ip = ipaddress.ip_address(sockaddr[0])
+        ip = getattr(ip, "ipv4_mapped", None) or ip
+        allowed_private = any(ip.version == net.version and ip in net for net in networks)
+        if (ip.is_multicast or ip.is_unspecified or
+                (not allowed_private and (not ip.is_global or ip.is_reserved or
+                                         getattr(ip, "is_site_local", False)))):
+            raise ValueError("此地址不允许查询；内网服需由管理员在 WebUI 配置 IP/网段白名单")
+    return addresses
+
+
+class _PinnedResolver(aiohttp.abc.AbstractResolver):
+    """HTTP 图片请求复用已校验的 DNS 结果，不再次解析域名。"""
+    def __init__(self, addresses):
+        self.addresses = addresses
+
+    async def resolve(self, host, port=0, family=socket.AF_INET):
+        return [{"hostname": host, "host": item[4][0], "port": port,
+                 "family": item[0], "proto": item[2], "flags": socket.AI_NUMERICHOST}
+                for item in self.addresses if family in (socket.AF_UNSPEC, item[0])]
+
+    async def close(self):
+        pass
+
+
+def _validated_icon_src(icon: str) -> str:
+    """只允许有大小限制且经过实际图片校验的 PNG/JPEG/WebP data URI。"""
+    if not isinstance(icon, str) or len(icon) > SERVER_ICON_MAX_BYTES * 2:
+        return ""
+    icon = icon.strip()
+    if icon.startswith("data:"):
+        header, separator, icon = icon.partition(",")
+        if not separator or header not in {"data:image/png;base64", "data:image/jpeg;base64", "data:image/webp;base64"}:
+            return ""
+    elif icon.startswith("base64://"):
+        icon = icon.removeprefix("base64://")
+    try:
+        data = base64.b64decode(icon, validate=True)
+        if not data or len(data) > SERVER_ICON_MAX_BYTES:
+            return ""
+        with PILImage.open(BytesIO(data)) as image:
+            fmt = (image.format or "").lower()
+            if fmt not in {"png", "jpeg", "webp"} or max(image.size) > 1024:
+                return ""
+            image.verify()
+        return f"data:image/{fmt};base64,{base64.b64encode(data).decode('ascii')}"
+    except Exception:
+        return ""
+
+
+async def _download_server_icon(icon: str) -> str:
+    """图标在插件端限时下载；禁止内网、重定向及将远程 URL 交给渲染器。"""
+    async def download():
+        parsed = urlparse(icon)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            return ""
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        addresses = await _resolve_query_addresses(parsed.hostname, port, socket.SOCK_STREAM)
+        connector = aiohttp.TCPConnector(resolver=_PinnedResolver(addresses), use_dns_cache=False)
+        async with aiohttp.ClientSession(connector=connector, timeout=aiohttp.ClientTimeout(total=3)) as session:
+            async with session.get(icon, allow_redirects=False) as response:
+                if response.status != 200 or (response.content_length or 0) > SERVER_ICON_MAX_BYTES:
+                    return ""
+                data = bytearray()
+                async for chunk in response.content.iter_chunked(16384):
+                    data.extend(chunk)
+                    if len(data) > SERVER_ICON_MAX_BYTES:
+                        return ""
+                return _validated_icon_src(base64.b64encode(data).decode("ascii"))
+    try:
+        return await asyncio.wait_for(download(), timeout=3)
+    except Exception:
+        return ""
+
+
+async def query_java_server_api(host: str, port: int = JAVA_DEFAULT_PORT, timeout: int = 5,
+                                private_server_allowlist=(), _resolved_addresses=None) -> Dict[str, Any]:
     """使用第三方 API 查询 Java 版服务器状态"""
     try:
+        addresses = _resolved_addresses
+        if addresses is None:
+            addresses = await asyncio.wait_for(
+                _resolve_query_addresses(host, port, socket.SOCK_STREAM, private_server_allowlist), timeout)
         async with aiohttp.ClientSession() as session:
-            url = f"https://api.mcstatus.io/v2/status/java/{host}:{port}"
-            async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+            address = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+            url = f"https://api.mcstatus.io/v2/status/java/{quote(address, safe='')}"
+            async with session.get(url, timeout=aiohttp.ClientTimeout(total=timeout), allow_redirects=False) as resp:
                 if resp.status == 200:
                     data = await resp.json()
                     if data.get("online"):
@@ -223,7 +324,8 @@ async def query_java_server_api(host: str, port: int = JAVA_DEFAULT_PORT) -> Dic
                             else:
                                 # 反查失败，尝试直连查询补全协议号
                                 logger.info(f"[MOTD] 版本名反查失败，尝试直连查询补全")
-                                direct = await query_java_server_direct(host, port)
+                                direct = await query_java_server_direct(host, port, timeout,
+                                    private_server_allowlist, _resolved_addresses=addresses)
                                 if "error" not in direct and "version" in direct:
                                     protocol_raw = direct["version"].get("protocol")
                                     if protocol_raw is not None:
@@ -263,8 +365,9 @@ async def query_java_server_api(host: str, port: int = JAVA_DEFAULT_PORT) -> Dic
         return {"error": f"API 查询失败: {str(e)}"}
 
 
-async def query_java_server_direct(host: str, port: int = JAVA_DEFAULT_PORT, timeout: int = 5) -> Dict[str, Any]:
-    """直接查询 Java 版服务器状态"""
+async def query_java_server_direct(host: str, port: int = JAVA_DEFAULT_PORT, timeout: int = 5,
+                                   private_server_allowlist=(), _resolved_addresses=None) -> Dict[str, Any]:
+    """使用可取消的异步 TCP 查询；DNS、连接及读取共用一个超时预算。"""
     
     def _pack_varint(value: int) -> bytes:
         if value < 0:
@@ -280,13 +383,10 @@ async def query_java_server_direct(host: str, port: int = JAVA_DEFAULT_PORT, tim
                 break
         return result
     
-    def _unpack_varint(sock: socket.socket) -> int:
+    async def _unpack_varint(reader: asyncio.StreamReader) -> int:
         result = 0
         for i in range(5):
-            byte = sock.recv(1)
-            if not byte:
-                raise ConnectionError("连接中断")
-            byte = byte[0]
+            byte = (await reader.readexactly(1))[0]
             result |= (byte & 0x7F) << (7 * i)
             if not (byte & 0x80):
                 return result
@@ -295,47 +395,51 @@ async def query_java_server_direct(host: str, port: int = JAVA_DEFAULT_PORT, tim
     def _pack_data(data: bytes) -> bytes:
         return _pack_varint(len(data)) + data
     
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        sock.settimeout(timeout)
+    async def exchange():
         start_time = time.perf_counter()
-        sock.connect((host, port))
-        
-        # 发送握手包
-        handshake_data = (
-            _pack_varint(-1) +  # 协议版本 -1
-            _pack_data(host.encode('utf-8')) +
-            struct.pack('>H', port) +
-            _pack_varint(1)  # 状态请求
-        )
-        packet = _pack_varint(0) + handshake_data
-        sock.sendall(_pack_data(packet))
-        
-        # 发送状态请求
-        sock.sendall(_pack_data(_pack_varint(0)))
-        
-        # 读取响应长度
-        length = _unpack_varint(sock)
-        packet_id = _unpack_varint(sock)
-        
-        # 读取 JSON 长度
-        json_length = _unpack_varint(sock)
-        
-        # 读取 JSON 数据
-        json_data = b""
-        while len(json_data) < json_length:
-            chunk = sock.recv(min(4096, json_length - len(json_data)))
-            if not chunk:
+        addresses = _resolved_addresses
+        if addresses is None:
+            addresses = await _resolve_query_addresses(host, port, socket.SOCK_STREAM, private_server_allowlist)
+        last_error = None
+        for family, _, _, _, sockaddr in addresses:
+            try:
+                reader, writer = await asyncio.open_connection(sockaddr[0], sockaddr[1], family=family)
                 break
-            json_data += chunk
-        
-        sock.close()
-        
-        response = json.loads(json_data.decode('utf-8'))
-        response["latency_ms"] = int(round((time.perf_counter() - start_time) * 1000))
-        return response
-        
-    except socket.timeout:
+            except OSError as exc:
+                last_error = exc
+        else:
+            raise last_error or ConnectionError("无法连接服务器")
+        try:
+            handshake = (_pack_varint(-1) + _pack_data(host.encode('utf-8')) +
+                         struct.pack('>H', port) + _pack_varint(1))
+            writer.write(_pack_data(b'\x00' + handshake) + b'\x01\x00')
+            await writer.drain()
+            length = await _unpack_varint(reader)
+            if not 0 < length <= 2 * 1024 * 1024:
+                raise ValueError("状态包长度无效")
+            packet_reader = asyncio.StreamReader()
+            packet_reader.feed_data(await reader.readexactly(length))
+            packet_reader.feed_eof()
+            if await _unpack_varint(packet_reader) != 0:
+                raise ValueError("状态包类型无效")
+            json_length = await _unpack_varint(packet_reader)
+            if not 0 < json_length <= length:
+                raise ValueError("状态 JSON 长度无效")
+            response = json.loads((await packet_reader.readexactly(json_length)).decode('utf-8'))
+            if not isinstance(response, dict):
+                raise ValueError("状态 JSON 必须是对象")
+            response["latency_ms"] = int(round((time.perf_counter() - start_time) * 1000))
+            return response
+        finally:
+            writer.close()
+            try:
+                await writer.wait_closed()
+            except OSError:
+                pass
+
+    try:
+        return await asyncio.wait_for(exchange(), timeout=timeout)
+    except asyncio.TimeoutError:
         return {"error": "连接超时，请检查服务器地址和端口是否正确"}
     except socket.gaierror:
         return {"error": "无法解析服务器地址，请检查主机名是否正确"}
@@ -345,13 +449,23 @@ async def query_java_server_direct(host: str, port: int = JAVA_DEFAULT_PORT, tim
         return {"error": f"查询失败: {str(e)}"}
 
 
-async def query_java_server(host: str, port: int = JAVA_DEFAULT_PORT, timeout: int = 5, use_api: bool = True) -> Dict[str, Any]:
+async def query_java_server(host: str, port: int = JAVA_DEFAULT_PORT, timeout: int = 5, use_api: bool = True,
+                            private_server_allowlist=()) -> Dict[str, Any]:
     """查询 Java 版服务器状态，优先使用 API"""
+    try:
+        addresses = await asyncio.wait_for(
+            _resolve_query_addresses(host, port, socket.SOCK_STREAM, private_server_allowlist), timeout)
+    except asyncio.TimeoutError:
+        return {"error": "服务器地址解析超时"}
+    except Exception as exc:
+        return {"error": str(exc)}
     if use_api:
         # 先尝试 API
-        result = await query_java_server_api(host, port)
+        result = await query_java_server_api(host, port, timeout, private_server_allowlist,
+                                              _resolved_addresses=addresses)
         if "error" not in result:
-            direct_result = await query_java_server_direct(host, port, timeout)
+            direct_result = await query_java_server_direct(host, port, timeout, private_server_allowlist,
+                                                            _resolved_addresses=addresses)
             if "error" not in direct_result:
                 if direct_result.get("latency_ms") is not None:
                     result["latency_ms"] = direct_result.get("latency_ms")
@@ -384,7 +498,8 @@ async def query_java_server(host: str, port: int = JAVA_DEFAULT_PORT, timeout: i
         logger.info(f"[MOTD] API 查询失败，尝试直接查询: {result.get('error')}")
 
     # API 失败或禁用 API，使用直接查询
-    result = await query_java_server_direct(host, port, timeout)
+    result = await query_java_server_direct(host, port, timeout, private_server_allowlist,
+                                             _resolved_addresses=addresses)
 
     # 直连返回协议号 ≤ 0（代理/多版本服务器），补查 API 获取带范围的版本名
     if "error" not in result:
@@ -393,7 +508,8 @@ async def query_java_server(host: str, port: int = JAVA_DEFAULT_PORT, timeout: i
         logger.info(f"[MOTD] 直连查询结果: protocol={proto}, name='{version_name}'")
         if proto is not None and proto <= 0:
             logger.info(f"[MOTD] 直连协议号 {proto} ≤ 0，补查 API 获取版本范围")
-            api_result = await query_java_server_api(host, port)
+            api_result = await query_java_server_api(host, port, timeout, private_server_allowlist,
+                                                        _resolved_addresses=addresses)
             if "error" not in api_result:
                 api_name = api_result.get("version", {}).get("name", "")
                 if api_name and api_name != version_name:
@@ -405,41 +521,61 @@ async def query_java_server(host: str, port: int = JAVA_DEFAULT_PORT, timeout: i
     return result
 
 
-async def query_bedrock_server(host: str, port: int = BEDROCK_DEFAULT_PORT, timeout: int = 5) -> Dict[str, Any]:
-    """异步查询基岩版服务器状态"""
-    try:
-        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        sock.settimeout(timeout)
-        
-        # 发送 Unconnected Ping
-        ping_data = b'\x01' + struct.pack('>Q', int(time.time() * 1000)) + b'\x00\x00\x00\x00\x00\x00\x00\x00'
-        sock.sendto(ping_data, (host, port))
-        
-        # 接收响应
-        data, addr = sock.recvfrom(2048)
-        sock.close()
-        
-        # 解析响应
-        if len(data) < 35:
-            return {"error": "响应数据无效"}
-        
-        # 跳过头部
-        server_info = data[35:].decode('utf-8', errors='ignore').split(';')
-        
-        if len(server_info) >= 6:
-            return {
-                "edition": server_info[0],
-                "motd": server_info[1],
-                "protocol": server_info[2],
-                "version": server_info[3],
-                "online_players": server_info[4],
-                "max_players": server_info[5],
-                "server_id": server_info[6] if len(server_info) > 6 else "未知"
-            }
+async def query_bedrock_server(host: str, port: int = BEDROCK_DEFAULT_PORT, timeout: int = 5,
+                                private_server_allowlist=()) -> Dict[str, Any]:
+    """异步 RakNet 状态查询，兼容 Python 3.10；取消/超时均关闭 UDP transport。"""
+    async def exchange():
+        started = time.perf_counter()
+        loop = asyncio.get_running_loop()
+        addresses = await _resolve_query_addresses(host, port, socket.SOCK_DGRAM, private_server_allowlist)
+        timestamp = struct.pack('>Q', int(time.time() * 1000))
+        ping = b'\x01' + timestamp + RAKNET_MAGIC + struct.pack('>Q', random.getrandbits(64))
+        future = loop.create_future()
+
+        class PongProtocol(asyncio.DatagramProtocol):
+            def datagram_received(self, data, addr):
+                if future.done() or len(data) < 35 or len(data) > 4096:
+                    return
+                if data[0] != 0x1c or data[1:9] != timestamp or data[17:33] != RAKNET_MAGIC:
+                    return
+                size = struct.unpack('>H', data[33:35])[0]
+                if len(data) == 35 + size:
+                    future.set_result(data[35:])
+
+            def error_received(self, exc):
+                if not future.done():
+                    future.set_exception(exc)
+
+        last_error = None
+        for family, _, _, _, sockaddr in addresses:
+            try:
+                transport, _ = await loop.create_datagram_endpoint(
+                    PongProtocol, remote_addr=(sockaddr[0], sockaddr[1]), family=family)
+                break
+            except OSError as exc:
+                last_error = exc
         else:
-            return {"error": "无法解析服务器响应"}
-            
-    except socket.timeout:
+            raise last_error or ConnectionError("无法连接服务器")
+        try:
+            transport.sendto(ping)
+            server_info = (await future).decode('utf-8').split(';')
+            if len(server_info) < 6 or server_info[0] not in {"MCPE", "MCEE"}:
+                return {"error": "无法解析服务器响应"}
+            return {
+                "edition": server_info[0], "motd": server_info[1],
+                "protocol": server_info[2], "version": server_info[3],
+                "online_players": server_info[4], "max_players": server_info[5],
+                "server_id": server_info[6] if len(server_info) > 6 else "未知",
+                "latency_ms": int(round((time.perf_counter() - started) * 1000)),
+            }
+        finally:
+            transport.close()
+            if not future.done():
+                future.cancel()
+
+    try:
+        return await asyncio.wait_for(exchange(), timeout=timeout)
+    except asyncio.TimeoutError:
         return {"error": "连接超时，请检查服务器地址和端口是否正确"}
     except Exception as e:
         return {"error": f"查询失败: {str(e)}"}
@@ -1305,7 +1441,7 @@ body {
 '''
 
 
-MOTD_DUAL_TEMPLATE = '''<<!DOCTYPE html>
+MOTD_DUAL_TEMPLATE = '''<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
@@ -1883,7 +2019,7 @@ html, body, .wallpaper, .shade, .dashboard {
     </section>
     {% endfor %}
   </div>
-  <div class="footer">MC-MOTD-V1.8.0</div>
+  <div class="footer">MC-MOTD-V{{ plugin_version }}</div>
 </main>
 </body>
 </html>
@@ -1941,6 +2077,13 @@ class MOTDPlugin(Star):
         self.admin_only_config = self.config.get("admin_only_config", True)
         self.query_timeout = self.config.get("query_timeout", 5)
         self.use_api = self.config.get("use_api", True)
+        raw_allowlist = self.config.get("private_server_allowlist", [])
+        self.private_server_allowlist = []
+        for entry in raw_allowlist if isinstance(raw_allowlist, list) else []:
+            try:
+                self.private_server_allowlist.append(str(ipaddress.ip_network(str(entry).strip(), strict=False)))
+            except ValueError:
+                logger.warning("[MOTD] 忽略无效的内网服务器 IP/网段白名单项")
         self.enable_random_wallpaper = self.config.get("enable_random_wallpaper", True)
         self.enable_player_avatars = self.config.get("enable_player_avatars", True)
         category = str(self.config.get("wallpaper_category", "moe") or "moe").strip().lower()
@@ -2585,20 +2728,15 @@ class MOTDPlugin(Star):
                 player["_avatar_src"] = avatar
 
     def _server_icon_src(self, result: Dict[str, Any]) -> str:
-        """提取服务器图标，返回可放入 img src 的字符串。"""
+        """模板仅接收已验证的图片数据，绝不传递远程 URL。"""
+        return _validated_icon_src(result.get("favicon") or result.get("icon") or "")
+
+    async def _hydrate_server_icon(self, result: Dict[str, Any]) -> None:
         icon = result.get("favicon") or result.get("icon") or ""
-        if not isinstance(icon, str):
-            return ""
-        icon = icon.strip()
-        if not icon:
-            return ""
-        if icon.startswith(("http://", "https://", "data:image/")):
-            return icon
-        if icon.startswith("base64://"):
-            icon = icon.removeprefix("base64://")
-        elif "base64," in icon:
-            icon = icon.split("base64,", 1)[1]
-        return f"data:image/png;base64,{icon}"
+        validated = self._server_icon_src(result)
+        if not validated and isinstance(icon, str) and icon.startswith(("http://", "https://")):
+            validated = await _download_server_icon(icon)
+        result["favicon"] = validated
 
     def _format_response(self, result: Dict[str, Any], server_address: str, is_java: bool = True, avatar_limit: int = AVATAR_DISPLAY_LIMIT) -> Dict[str, Any]:
         """格式化查询结果为 HTML 模板上下文字典"""
@@ -2764,12 +2902,14 @@ class MOTDPlugin(Star):
         try:
             if is_java:
                 result = await asyncio.wait_for(
-                    query_java_server(server, port, self.query_timeout, self.use_api),
+                    query_java_server(server, port, self.query_timeout, self.use_api,
+                                      private_server_allowlist=self.private_server_allowlist),
                     timeout=self.query_timeout + 5
                 )
             else:
                 result = await asyncio.wait_for(
-                    query_bedrock_server(server, port, self.query_timeout),
+                    query_bedrock_server(server, port, self.query_timeout,
+                                         private_server_allowlist=self.private_server_allowlist),
                     timeout=self.query_timeout + 5
                 )
             logger.info(f"[MOTD] 查询完成，结果: {result}")
@@ -2783,6 +2923,8 @@ class MOTDPlugin(Star):
             f"[MOTD] 阶段耗时: server_query={time.monotonic() - query_started:.2f}s"
         )
 
+        if "error" not in result:
+            await self._hydrate_server_icon(result)
         if is_java and "error" not in result:
             avatar_started = time.monotonic()
             try:
@@ -2806,6 +2948,7 @@ class MOTDPlugin(Star):
         context = self._format_response(result, server_address, is_java=is_java)
         context["wallpaper_src"] = wallpaper_src
         context["queried_at"] = time.strftime("%H:%M:%S")
+        context["plugin_version"] = PLUGIN_VERSION
         render_started = time.monotonic()
         url = None
         # AstrBot's network renderer selects an endpoint per call. Do not let one
@@ -2867,12 +3010,14 @@ class MOTDPlugin(Star):
         try:
             if is_java:
                 result = await asyncio.wait_for(
-                    query_java_server(host, port, self.query_timeout, self.use_api),
+                    query_java_server(host, port, self.query_timeout, self.use_api,
+                                      private_server_allowlist=self.private_server_allowlist),
                     timeout=self.query_timeout + 5,
                 )
             else:
                 result = await asyncio.wait_for(
-                    query_bedrock_server(host, port, self.query_timeout),
+                    query_bedrock_server(host, port, self.query_timeout,
+                                         private_server_allowlist=self.private_server_allowlist),
                     timeout=self.query_timeout + 5,
                 )
         except asyncio.TimeoutError:
@@ -2884,6 +3029,8 @@ class MOTDPlugin(Star):
             f"[MOTD] 单服查询完成: server='{normalized}', "
             f"ok={'error' not in result}, elapsed={time.monotonic() - query_started:.2f}s"
         )
+        if "error" not in result:
+            await self._hydrate_server_icon(result)
         if is_java and "error" not in result:
             try:
                 await self._hydrate_player_avatars(result, avatar_limit=avatar_limit)
@@ -2897,7 +3044,7 @@ class MOTDPlugin(Star):
         server: str = "",
         is_java: bool = True,
     ):
-        """显式地址渲染单服；无地址时并发查询最多两个默认服务器。"""
+        """显式地址渲染单服；无地址时并发查询最多三个默认服务器。"""
         if not self._check_session_allowed(event):
             logger.info("[MOTD] 会话不在白名单中")
             return
@@ -2945,6 +3092,7 @@ class MOTDPlugin(Star):
                 "wallpaper_src": wallpaper_src,
             }
 
+        render_context["plugin_version"] = PLUGIN_VERSION
         render_started = time.monotonic()
         url = None
         if self.render_timeout >= 10:
@@ -3128,7 +3276,8 @@ class MOTDPlugin(Star):
         async def _validate(address: str):
             host, port = self._parse_server_address(address, True)
             return await asyncio.wait_for(
-                query_java_server(host, port, self.query_timeout, self.use_api),
+                query_java_server(host, port, self.query_timeout, self.use_api,
+                                  private_server_allowlist=self.private_server_allowlist),
                 timeout=self.query_timeout + 5,
             )
 
@@ -3243,7 +3392,8 @@ class MOTDPlugin(Star):
             
             try:
                 result = await asyncio.wait_for(
-                    query_java_server(server, port, self.query_timeout, self.use_api),
+                    query_java_server(server, port, self.query_timeout, self.use_api,
+                                      private_server_allowlist=self.private_server_allowlist),
                     timeout=self.query_timeout + 5
                 )
             except asyncio.TimeoutError:
