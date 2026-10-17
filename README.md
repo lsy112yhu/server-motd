@@ -1,325 +1,139 @@
-# AstrBot MOTD 查询插件
+# AstrBot MOTD 查询插件 (`server-motd`)
 
-一个用于查询 Minecraft 服务器状态的 AstrBot 插件，支持 Java 版和基岩版服务器，**兼容 ViaVersion 多版本服务器**，**支持 Velocity 代理子服查询**。
+一个用于查询 Minecraft 服务器状态的 AstrBot 高颜值卡片查询插件。支持 Java 版和基岩版服务器，**兼容 ViaVersion 多版本服务器**，**支持 Velocity 代理子服查询**，并内置**随机二次元壁纸背景与玩家头像网格渲染**。
 
 ![插件输出图片效果预览图1](./assets/preview_java.png)
 ![插件输出图片效果预览图2](./assets/preview_bedrock.png)
 ![插件输出图片效果预览图3](./assets/preview_proxy.png)
 
-## 功能特性
+---
 
-- ✅ **MOTD 查询**: 查询 Minecraft 服务器的 MOTD、在线玩家、版本等信息
-- ✅ **双版本支持**: 同时支持 Java 版和基岩版服务器查询
-- ✅ **图片输出渲染**: 支持输出精美图片
-- ✅ **ViaVersion 兼容**: 智能识别 ViaVersion 多版本服务器，正确显示版本范围
-- ✅ **代理服务器查询**: 支持查询 Velocity 代理及其子服状态（v1.6.0 新增）
-- ✅ **无需斜杠**: 直接输入 `motd` 即可触发，无需 `/` 前缀
-- ✅ **双默认服务器**: `/motd` 并发查询最多两台默认服务器并合并为一张状态图
-- ✅ **自适应排版**: 默认双服使用上下列表，指定地址时保留原有单服卡片
-- ✅ **标准端口**: 查询其他服务器时不带端口自动使用标准端口 25565
-- ✅ **API 查询**: 使用 mcstatus.io API 查询，更稳定可靠
-- ✅ **会话控制**: 可设置对哪些群聊/私聊生效
-- ✅ **管理员权限**: 插件配置仅管理员可修改
-- ✅ **完善报错**: 详细的错误提示和帮助信息
+## 🌟 功能特性
 
-## ViaVersion 兼容性
+- 🎮 **MOTD 查询**: 实时查询 Minecraft 服务器的 MOTD、在线玩家数、延迟、版本等信息。
+- 🎨 **精美图片渲染**: 基于 HTML/CSS 生成 1280×720 高清状态卡片，支持毛玻璃拟态与像素阴影风格。
+- 🖼️ **随机壁纸背景**: 内置后台异步壁纸拉取与压缩缓存池，查询时毫秒级随机抽取背景，零耗时等待。
+- 👤 **在线玩家头像网格**: 支持 4 列网格展示多达 16 位在线玩家皮肤头像（基于 Minotar / MC-Heads）。
+- 🔀 **ViaVersion 智能兼容**: 自动识别 ViaVersion 多版本服务端，精准提取并显示客户端支持版本范围（如 `1.8 ~ 1.21.4`）。
+- 🌐 **代理服务器支持**: 支持 Velocity 与 BungeeCord 代理架构，配合 [velostat](https://modrinth.com/plugin/velostat) 可直接查询代理与各子服运行状态。
+- ⚡ **多默认服务器并发**: 支持配置最多三台默认服务器，`/motd` 一键并发查询并自动合并为状态大图。
+- 💬 **人性化指令体验**: 无需强制加 `/`（直接发 `motd` 即可响应），支持 `motd set1~set3` 与 `motd remove` 动态配置。
+- 🛡️ **双查询引擎**: 默认优先使用稳定高效的 `mcstatus.io` API，支持无缝降级直连查询。
 
-本插件支持安装了 ViaVersion/ViaBackwards 的服务器：
+---
 
-| 情况 | 处理方式 |
-|------|----------|
-| `protocol.version = -1/0` | 识别为多版本模式，显示 `多版本` 而非 `-1` |
-| `version.name` 含版本范围 | 自动提取并显示 `支持客户端版本: 1.8 - 1.21.3` |
-| Paper/Spigot + ViaVersion | 解析协议号范围并转换为版本号显示 |
-| ViaVersion 字样检测 | 自动识别并标注 ViaVersion 兼容 |
+## 💻 环境要求与依赖安装
 
-## 代理服务器查询（v1.6.0 新增）
+### 1. 基础环境
+- **Python**: `>= 3.10`（推荐 3.11 或 3.12）
+- **AstrBot**: `>= 3.4.0`
 
-支持查询 Velocity/BungeeCord 代理服务器及其子服状态。
-
-### 查询模式
-
-| 模式 | 说明 | 适用场景 |
-|------|------|----------|
-| **普通查询** | 直接查询单个服务器 | 非代理服务器 |
-| **代理服务器查询** | 查询代理及其子服 | Velocity/BungeeCord 代理 |
-
-### 代理查询方式
-
-| 方式 | 说明 | 支持的代理 |
-|------|------|-----------|
-| **velostat** | 通过 velostat 插件 HTTP API 查询 | 仅 Velocity |
-| **子服直连** | 手动配置子服地址分别查询 | Velocity/BungeeCord |
-
-### 使用 velostat 模式（推荐）
-
-1. 在 Velocity 代理上安装 [velostat](https://modrinth.com/plugin/velostat) 插件
-2. 配置插件：
-   - 查询类型：代理服务器查询
-   - 代理查询方式：通过 velostat 插件查询
-   - velostat API 地址：`http://代理IP:8080`
-
-### 使用子服直连模式
-
-适用于：
-- BungeeCord 代理（无 velostat 插件支持）
-- 子服端口对外暴露的场景
-
-配置：
-- 查询类型：代理服务器查询
-- 代理查询方式：子服直连查询
-- 子服地址列表：`lobby:127.0.0.1:25566,survival:127.0.0.1:25567`
-
-> ⚠️ **注意**: BungeeCord 目前没有类似 velostat 的 HTTP API 插件，只能使用子服直连模式。
-
-## 使用方法
-
-### 方法一: 在官方插件市场中搜索 "Minecraft 服务器 motd 查询"
-
-### 方法二: 在本仓库下载插件 zip 文件, 在 WebUI 中选择从文件安装插件
-
-⚠️**重启 AstrBot**（重要！热重载可能无法正确加载配置）
-
-## 配置方法
-
-### 1. 在 WebUI 中配置
-
-| 配置项 | 说明 | 建议值 |
-|--------|------|--------|
-| `default_server` | 默认服务器地址 | `n.rainplay.cn` |
-| `default_port` | 默认服务器端口 | `46861` |
-| `query_type` | 查询类型 | `normal` |
-| `proxy_query_method` | 代理查询方式 | `velostat` |
-| `velostat_api_url` | velostat API 地址 | `http://代理IP:8080` |
-| `sub_servers` | 子服地址列表 | `lobby:host:port,survival:host:port` |
-| `enable_all_sessions` | 对所有会话生效 | ✅ 勾选 |
-| `use_api` | 使用 API 查询 | ✅ 勾选（更稳定） |
-| `query_timeout` | 查询超时时间 | `5` |
-
-**配置完成后必须重启 AstrBot！**
-
-### 2. 配置文件方式
-
-也可以直接编辑 `data/config/astrbot_plugin_minecraft_motd_config.json`：
-
-**普通查询模式**：
-```json
-{
-    "default_server": "n.rainplay.cn",
-    "default_port": 46861,
-    "query_type": "normal",
-    "enable_all_sessions": true,
-    "enabled_sessions": [],
-    "admin_only_config": true,
-    "query_timeout": 5,
-    "use_api": true
-}
+### 2. Python 依赖自动补齐
+本仓库根目录已包含标准 `requirements.txt`：
+```text
+aiohttp>=3.8.0
+Pillow>=9.0.0
 ```
 
-**代理查询模式（velostat）**：
-```json
-{
-    "default_server": "proxy.example.com",
-    "default_port": 25565,
-    "query_type": "proxy",
-    "proxy_query_method": "velostat",
-    "velostat_api_url": "http://proxy.example.com:8080",
-    "enable_all_sessions": true,
-    "query_timeout": 5,
-    "use_api": true
-}
+> **自动补齐**：当你在 AstrBot WebUI 插件管理中安装或从本仓库 Git 安装时，AstrBot 会**自动检测并安装**上述 Python 依赖，无需手动操作。
+
+若处于特殊离线环境或需要手动补齐依赖，可在 AstrBot 运行环境中执行：
+```bash
+pip install -r requirements.txt
 ```
 
-**代理查询模式（子服直连）**：
-```json
-{
-    "default_server": "proxy.example.com",
-    "default_port": 25565,
-    "query_type": "proxy",
-    "proxy_query_method": "direct",
-    "sub_servers": "lobby:127.0.0.1:25566,survival:127.0.0.1:25567",
-    "enable_all_sessions": true,
-    "query_timeout": 5,
-    "use_api": true
-}
+### 3. 图片渲染支持（Playwright）
+卡片渲染依赖 AstrBot 内置的 `html_render` 服务。若使用本地渲染器且首次运行报错缺少浏览器内核，请确保安装了 Chromium：
+```bash
+# 进入 AstrBot 的 Python 环境后运行
+playwright install chromium
+playwright install-deps  # Linux 环境补齐系统依赖库
 ```
+*(注：若使用 AstrBot 官方 Docker 镜像或配置了独立的网络渲染端点，则无需额外配置)*。
 
-## 使用方法
+---
 
-### 查询指令
+## 📦 安装方法
 
+### 方法一：从 AstrBot 插件市场安装（推荐）
+在 AstrBot 的 WebUI 插件市场中搜索 `server-motd` 或 `Minecraft 服务器 motd 查询`，点击安装。
+
+### 方法二：从 Git 仓库或压缩包安装
+在 AstrBot 根目录的 `data/plugins/` 下克隆本仓库：
+```bash
+cd data/plugins
+git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_motd
+```
+或直接下载本仓库的 Release / ZIP 解压至该目录。安装后**重启 AstrBot** 即可生效。
+
+---
+
+## 🎨 随机壁纸背景配置
+
+插件内置了基于 `t.alcy.cc` 的壁纸异步预热引擎，可在配置面板自定义背景风格：
+
+| 配置项 | 默认值 | 可选值 / 说明 |
+|--------|--------|--------------|
+| `enable_random_wallpaper` | `true` | 是否启用随机卡片壁纸背景（关闭则使用经典半透明纯色底） |
+| `wallpaper_category` | `moe` | 壁纸分类：<br>• `moe`：二次元萌系插画（默认）<br>• `pc`：通用高清横屏壁纸<br>• `fj`：自然风景<br>• `bd`：白底简约<br>• `ys`：原神主题 |
+| `wallpaper_cache_count` | `100` | 本地缓存池容量（张数，10~200）。插件在后台静默预取，不占用查询响应时间 |
+| `wallpaper_prefetch_concurrency`| `3` | 后台并发下载数（1~6） |
+
+---
+
+## ⚙️ 完整配置项说明
+
+可在 AstrBot WebUI 插件配置中可视化调整，或直接修改 `data/config/astrbot_plugin_minecraft_motd_config.json`：
+
+| 配置项 | 类型 | 默认值 | 说明 |
+|--------|------|--------|------|
+| `default_servers` | list | `[]` | 默认并发查询的服务器列表（最多 3 个），不带参数时触发 |
+| `enable_all_sessions` | bool | `true` | 是否对所有群聊和私聊生效 |
+| `enabled_sessions` | list | `[]` | 白名单会话列表（当关闭全会话生效时生效） |
+| `admin_only_config` | bool | `true` | 仅 AstrBot 管理员可使用 `set`/`remove` 指令修改配置 |
+| `query_timeout` | int | `5` | 服务器查询超时时间（秒） |
+| `use_api` | bool | `true` | 优先通过 `mcstatus.io` API 查询，失败时自动降级直连 |
+| `enable_player_avatars` | bool | `true` | 是否显示在线玩家头像网格 |
+| `render_timeout` | int | `20` | HTML 图片渲染硬超时（秒） |
+
+---
+
+## 📖 指令列表
+
+### 玩家常用指令
 | 指令 | 说明 | 示例 |
 |------|------|------|
-| `/motd` 或 `motd` | 并发查询默认的最多两台 Java 服务器 | `/motd` |
-| `motd <地址>` | 查询指定服务器（使用标准端口 25565） | `motd mc.hypixel.net` |
-| `motd <地址:端口>` | 查询指定服务器（使用指定端口） | `motd n.rainplay.cn:46861` |
-| `/在线` 或 `在线` | `/motd` 的兼容别名 | `/在线` |
+| `/motd` 或 `motd` | 并发查询默认服务器列表 | `motd` |
+| `motd <地址>` | 查询指定服务器（默认 25565） | `motd mc.hypixel.net` |
+| `motd <地址:端口>` | 查询指定服务器与端口 | `motd play.example.com:25565` |
+| `/在线` 或 `在线` | 查询别名 | `在线` |
 | `motd-bedrock` | 查询默认基岩版服务器 | `motd-bedrock` |
 | `motd-bedrock <地址:端口>` | 查询指定基岩版服务器 | `motd-bedrock mc.example.com:19132` |
 
 ### 管理员配置指令
-
 | 指令 | 说明 | 示例 |
 |------|------|------|
-| `/motd set1 <地址>` | 设置第一台默认 Java 服务器；保存前会验证连通性 | `/motd set1 a.example.com:25565` |
-| `/motd set2 <地址>` | 设置第二台默认 Java 服务器；保存前会验证连通性 | `/motd set2 b.example.com:25565` |
-| `/motd set3 <地址>` | 设置第三台默认 Java 服务器；保存前会验证连通性 | `/motd set3 c.example.com:25565` |
-| `/motd remove <set1|set2|set3>` | 清除指定的默认服务器配置（支持别名 rm、del 及序号 1/2/3） | `/motd remove set1` |
-| `/motd get` | 查看当前默认服务器和查询配置 | `/motd get` |
+| `/motd set1 <地址>` | 设置第 1 台默认服务器（会先验证连通性） | `/motd set1 server1.example.com` |
+| `/motd set2 <地址>` | 设置第 2 台默认服务器 | `/motd set2 server2.example.com` |
+| `/motd set3 <地址>` | 设置第 3 台默认服务器 | `/motd set3 server3.example.com` |
+| `/motd remove <1\|2\|3>` | 清除指定槽位的默认服务器（配置自动前移） | `/motd remove 1` 或 `/motd del set2` |
+| `/motd get` | 查看当前已保存的默认服务器与配置 | `/motd get` |
 
-> ⚠️ **注意**: 配置指令仅管理员可用。
+---
 
-## 故障排查
+## 🛠️ 故障排查
 
-### 问题：发送 `motd` 没有反应？
+1. **发送 `motd` 无响应**：
+   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.7.5`。
+   - 确认发送者或群聊是否符合会话规则。
+2. **卡片图片无法渲染（提示超时或报错）**：
+   - 确认宿主环境已安装 Playwright 依赖（`playwright install chromium`）。
+   - 可在插件配置中将 `render_timeout` 适当调大（例如 25 秒）。
+3. **玩家头像显示为默认灰色问号**：
+   - 正常现象，当服务器为离线模式（盗版服）或第三方皮肤站、玩家 UUID 无法在官方 Mojang/Minotar 解析时，插件会自动显示本地兜底占位图，不影响整体排版。
 
-**排查步骤：**
+---
 
-1. **检查插件是否加载**
-   - 查看 AstrBot 日志，搜索 `[MOTD]`
-   - 应该看到类似：`[MOTD] 插件已加载 vX.X.X`
+## 📄 开源许可证
 
-2. **检查配置是否正确**
-   - 在 WebUI 中查看插件配置
-   - 确认 `default_server` 和 `default_port` 已设置
-   - 确认 `enable_all_sessions` 为 true
-
-3. **检查日志级别**
-   - 在 `data/cmd_config.json` 中设置 `"log_level": "DEBUG"`
-   - 重启后查看是否有 `[MOTD] 收到消息` 的日志
-
-4. **检查白名单**
-   - 如果开启了 ID 白名单，确保你的 QQ 号在白名单中
-   - 或者在 WebUI 中关闭白名单限制
-
-### 问题：ViaVersion 服务器版本显示异常？
-
-本插件已内置 ViaVersion 兼容性处理：
-- 自动检测 `protocol.version = -1/0` 的多版本模式
-- 从 `version.name` 提取版本范围
-- 支持 Paper/Spigot/Bukkit/Purpur 等常见服务端
-- 支持 Velocity/BungeeCord/Waterfall 等代理软件
-
-**排查步骤：**
-
-1. **查看版本解析日志**
-   - 在 AstrBot 日志中搜索 `[MOTD] 版本解析输入`
-   - 日志会显示完整的解析链路：
-     ```
-     [MOTD] API 返回原始数据: version.name_raw='...', version.protocol=null
-     [MOTD] 版本解析输入: name='...', protocol_raw=..., protocol=...
-     [MOTD] 代理检测命中: 'velocity' -> Velocity
-     [MOTD] 版本范围解析: all_versions=['1.8', '1.21.4'], mc_versions=['1.8', '1.21.4']
-     [MOTD] 版本解析输出: server='1.8.x', client='1.8 ~ 1.21.4', via_hint='检测到: Velocity 代理'
-     ```
-
-2. **检查协议号来源**
-   - 如果看到 `protocol_raw=null`，表示 API 未返回协议号
-   - 插件会自动从版本名反查或使用直连查询补全
-
-3. **检查代理检测结果**
-   - 如果服务器使用代理软件，日志会显示 `代理检测命中`
-   - 支持的代理：Velocity、BungeeCord、Waterfall、FlameCord、Geyser 等
-
-4. **反馈问题时请提供**
-   - 完整的 `[MOTD]` 相关日志
-   - 服务器地址和端口
-   - 服务器使用的代理软件（如有）
-
-### 问题：代理服务器查询失败？
-
-**velostat 模式：**
-
-1. 确认 velostat 插件已安装并运行
-2. 确认 velostat API 地址正确（默认端口 8080）
-3. 检查 velostat API 是否可访问：`curl http://代理IP:8080/status`
-
-**子服直连模式：**
-
-1. 确认子服地址格式正确：`服务器名:host:port`
-2. 确认子服端口对外暴露
-3. 检查子服是否在线
-
-### 问题：查询超时或连接被拒绝？
-
-1. 确认服务器地址和端口是否正确
-2. 尝试使用 `use_api: true`（默认开启）使用 API 查询
-3. 增加 `query_timeout` 配置值
-4. 检查服务器是否在线
-5. 检查 AstrBot 运行的网络环境
-
-## 日志解读指南
-
-插件输出的所有日志都以 `[MOTD]` 为前缀，以下是关键日志的含义：
-
-### 启动日志
-
-```
-[MOTD] 插件初始化完成，版本 X.X.X
-[MOTD] 配置加载: default_server='xxx', port=25565
-[MOTD] 查询类型: normal/proxy
-[MOTD] 代理查询方式: velostat/direct
-[MOTD] 使用 API 查询: True
-[MOTD] 插件已加载 vX.X.X
-```
-
-### 查询流程日志
-
-```
-[MOTD] 匹配到 motd 指令: motd mc.example.com    # 触发查询
-[MOTD] 开始查询: server='mc.example.com', is_java=True
-[MOTD] 使用指定服务器: mc.example.com:25565
-[MOTD] 开始执行查询，超时=5秒
-[MOTD] 查询完成，结果: {...}                      # 原始查询结果
-[MOTD] 查询流程完成
-```
-
-### 代理查询日志
-
-```
-[MOTD] 开始代理查询: method=velostat, server='proxy.example.com'
-[MOTD] 代理查询流程完成
-```
-
-### 版本解析日志（关键）
-
-```
-# 1. API 返回的原始数据
-[MOTD] API 返回原始数据: version.name_raw='Velocity 1.7.2-1.21.4', version.protocol=null
-
-# 2. 版本解析输入
-[MOTD] 版本解析输入: name='Velocity 1.7.2-1.21.4', protocol_raw=null, protocol=0
-
-# 3. 协议号处理
-[MOTD] 协议号无效(0)，从版本名 'Velocity 1.7.2-1.21.4' 反查到协议 47
-[MOTD] 协议号映射: 47 -> display='1.8.x', major='1.8'
-
-# 4. 代理检测
-[MOTD] 代理检测命中: 'velocity' -> Velocity
-
-# 5. 版本范围解析
-[MOTD] 版本范围解析: all_versions=['1.7.2', '1.21.4'], mc_versions=['1.7.2', '1.21.4']
-
-# 6. 最终输出
-[MOTD] 版本解析输出: server='1.8.x', client='1.7.2 ~ 1.21.4', via_hint='检测到: Velocity 代理'
-```
-
-### 格式化结果日志
-
-```
-[MOTD] Java 版原始数据: version={...}, players={...}
-[MOTD] 格式化结果: server_version='1.8.x', client_version='1.7.2 ~ 1.21.4', players=10/100
-```
-
-### 错误日志
-
-```
-[MOTD] API 查询失败，尝试直接查询: 连接超时
-[MOTD] 查询超时
-[MOTD] 查询异常: ...
-[MOTD] 图片渲染失败，回退到纯文本: ...
-```
-
-## 许可证
-
-MIT License
+本项目基于 [MIT License](LICENSE) 开源。
