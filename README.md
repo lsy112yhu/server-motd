@@ -133,7 +133,7 @@ git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_
 ## 🛠️ 故障排查
 
 1. **发送 `motd` 无响应**：
-   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.7.6`。
+   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.7.7`。
    - 确认发送者或群聊是否符合会话规则。
 2. **卡片图片无法渲染（提示超时或报错）**：
    - 确认宿主环境已安装 Playwright 依赖（`playwright install chromium`）。

@@ -35,7 +35,7 @@ JAVA_DEFAULT_PORT = 25565
 BEDROCK_DEFAULT_PORT = 19132
 
 PLUGIN_NAME = "astrbot_plugin_minecraft_motd"
-PLUGIN_VERSION = "1.7.6"
+PLUGIN_VERSION = "1.7.7"
 WALLPAPER_API_BASE = "https://t.alcy.cc/json/"
 WALLPAPER_ALLOWED_HOSTS = {"t.alcy.cc", "tc.alcy.cc"}
 WALLPAPER_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -128,6 +128,25 @@ MINECRAFT_COLOR_MAP = {
     '8': '#555555', '9': '#5555ff', 'a': '#55ff55', 'b': '#55ffff',
     'c': '#ff5555', 'd': '#ff55ff', 'e': '#ffff55', 'f': '#ffffff',
 }
+
+# AstrBot/部分消息适配器可能把内部消息 ID 追加到纯文本末尾。
+# 只清理“消息尾部”的 [MSG_ID:...]，避免误伤正常命令参数。
+_MESSAGE_META_SUFFIX_RE = re.compile(
+    r"(?:\s*\[\s*MSG_ID\s*:\s*[^\]\r\n]*\]\s*)+$",
+    re.IGNORECASE,
+)
+
+
+def _strip_message_metadata(text: Any) -> str:
+    """移除消息尾部由框架/适配器附加的 [MSG_ID:...] 元数据。"""
+    value = str(text or "").strip()
+    while value:
+        cleaned = _MESSAGE_META_SUFFIX_RE.sub("", value).strip()
+        if cleaned == value:
+            break
+        value = cleaned
+    return value
+
 
 # 版本号正则（匹配 1.x.y 或 1.x）
 _VERSION_RE = re.compile(r'(\d+\.\d+(?:\.\d+)?)')
@@ -2146,6 +2165,7 @@ class MOTDPlugin(Star):
         解析服务器地址和端口
         如果用户指定了地址但不带端口，使用标准端口（Java 25565 / 基岩 19132）
         """
+        address = _strip_message_metadata(address)
         if ':' in address:
             host, port_str = address.rsplit(':', 1)
             try:
@@ -3324,7 +3344,7 @@ class MOTDPlugin(Star):
 
     async def _dispatch_motd(self, event: AstrMessageEvent, command: str, argument: str = ""):
         command = str(command or "").strip().lower()
-        argument = str(argument or "").strip()
+        argument = _strip_message_metadata(argument)
         if command == "motd":
             action, _, value = argument.partition(" ")
             if action.lower() in {"set", "set1", "set2", "set3", "get", "remove", "rm", "del", "delete"}:
@@ -3340,7 +3360,7 @@ class MOTDPlugin(Star):
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def on_message(self, event: AstrMessageEvent):
         """监听所有消息，让群聊中的 MOTD 指令不依赖唤醒前缀。"""
-        message = event.message_str.strip()
+        message = _strip_message_metadata(event.message_str)
         if not re.match(r'^/?(?:motd|在线)', message, re.IGNORECASE):
             return
 

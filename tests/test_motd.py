@@ -354,6 +354,48 @@ class PolicyTests(unittest.IsolatedAsyncioTestCase):
             await runner.cleanup()
 
 
+class MessageMetadataTests(unittest.IsolatedAsyncioTestCase):
+    def test_strip_trailing_msg_id_metadata(self):
+        self.assertEqual(
+            motd._strip_message_metadata('/motd set1 pl.okmc.cc:55141 [MSG_ID:25565]'),
+            '/motd set1 pl.okmc.cc:55141',
+        )
+        self.assertEqual(motd._strip_message_metadata('/motd [MSG_ID:123456]'), '/motd')
+        self.assertEqual(
+            motd._strip_message_metadata('/motd example.org:25565'),
+            '/motd example.org:25565',
+        )
+
+    def test_address_parser_defensively_ignores_msg_id_suffix(self):
+        plugin = object.__new__(motd.MOTDPlugin)
+        self.assertEqual(
+            plugin._parse_server_address('pl.okmc.cc:55141 [MSG_ID:987654]', True),
+            ('pl.okmc.cc', 55141),
+        )
+
+    async def test_dispatch_strips_msg_id_from_set_and_empty_query(self):
+        plugin = object.__new__(motd.MOTDPlugin)
+        plugin._handle_motd_config = AsyncMock()
+        plugin._do_motd_query_v2 = AsyncMock()
+        event = types.SimpleNamespace(stop_event=lambda: None)
+
+        await plugin._dispatch_motd(
+            event, 'motd', 'set1 pl.okmc.cc:55141 [MSG_ID:25565]'
+        )
+        plugin._handle_motd_config.assert_awaited_once_with(
+            event, 'set1', 'pl.okmc.cc:55141'
+        )
+        plugin._do_motd_query_v2.assert_not_awaited()
+
+        plugin._handle_motd_config.reset_mock()
+        plugin._do_motd_query_v2.reset_mock()
+        await plugin._dispatch_motd(event, 'motd', '[MSG_ID:123456]')
+        plugin._handle_motd_config.assert_not_awaited()
+        plugin._do_motd_query_v2.assert_awaited_once_with(
+            event, '', is_java=True
+        )
+
+
 class VersionAndTemplateTests(unittest.TestCase):
     def test_protocols_and_reverse_ranges(self):
         expected = {'1.21.7':772,'1.21.8':772,'26.1':775,'26.1.1':775,'26.1.2':775,
