@@ -38,50 +38,17 @@ jobs:
           main_path = Path('main.py')
           text = main_path.read_text(encoding='utf-8')
           text = replace_once(text, 'PLUGIN_VERSION = "1.7.8"', 'PLUGIN_VERSION = "1.7.9"', 'plugin version')
-          text = replace_once(
-              text,
-              'WALLPAPER_API_BASE = "https://t.alcy.cc/json/"',
-              'WALLPAPER_API_BASE = "https://t.alcy.cc/json"',
-              'wallpaper API base',
-          )
+          text = replace_once(text, 'WALLPAPER_API_BASE = "https://t.alcy.cc/json/"', 'WALLPAPER_API_BASE = "https://t.alcy.cc/json"', 'wallpaper API base')
 
-          old_results = '''                    results = await asyncio.gather(
-                        *(self._fetch_random_wallpaper_bytes(session) for _ in range(batch_size)),
-                        return_exceptions=True,
-                    )
-                    added = 0
-                    for result in results:
-                        if not isinstance(result, bytes):
-                            continue
-'''
-          new_results = '''                    results = await asyncio.gather(
-                        *(self._fetch_random_wallpaper_bytes(session) for _ in range(batch_size)),
-                        return_exceptions=True,
-                    )
-                    failures = [item for item in results if isinstance(item, Exception)]
-                    if failures:
-                        first = failures[0]
-                        logger.warning(
-                            f"[MOTD] 壁纸下载失败: {type(first).__name__}: {first} "
-                            f"(本批失败 {len(failures)}/{len(results)})"
-                        )
-                    added = 0
-                    for result in results:
-                        if not isinstance(result, bytes):
-                            continue
-'''
+          old_results = """                    results = await asyncio.gather(\n                        *(self._fetch_random_wallpaper_bytes(session) for _ in range(batch_size)),\n                        return_exceptions=True,\n                    )\n                    added = 0\n                    for result in results:\n                        if not isinstance(result, bytes):\n                            continue\n"""
+          new_results = """                    results = await asyncio.gather(\n                        *(self._fetch_random_wallpaper_bytes(session) for _ in range(batch_size)),\n                        return_exceptions=True,\n                    )\n                    failures = [item for item in results if isinstance(item, Exception)]\n                    if failures:\n                        first = failures[0]\n                        logger.warning(\n                            f\"[MOTD] 壁纸下载失败: {type(first).__name__}: {first} \"\n                            f\"(本批失败 {len(failures)}/{len(results)})\"\n                        )\n                    added = 0\n                    for result in results:\n                        if not isinstance(result, bytes):\n                            continue\n"""
           text = replace_once(text, old_results, new_results, 'wallpaper error logging')
           main_path.write_text(text, encoding='utf-8')
 
           tests_path = Path('tests/test_motd.py')
           tests = tests_path.read_text(encoding='utf-8')
-          marker = '''class WallpaperCommandTests(unittest.IsolatedAsyncioTestCase):
-'''
-          replacement = '''class WallpaperCommandTests(unittest.IsolatedAsyncioTestCase):
-    def test_wallpaper_api_uses_current_json_endpoint(self):
-        self.assertEqual(motd.WALLPAPER_API_BASE, 'https://t.alcy.cc/json')
-
-'''
+          marker = "class WallpaperCommandTests(unittest.IsolatedAsyncioTestCase):\n"
+          replacement = "class WallpaperCommandTests(unittest.IsolatedAsyncioTestCase):\n    def test_wallpaper_api_uses_current_json_endpoint(self):\n        self.assertEqual(motd.WALLPAPER_API_BASE, 'https://t.alcy.cc/json')\n\n"
           tests = replace_once(tests, marker, replacement, 'wallpaper endpoint regression test')
           tests_path.write_text(tests, encoding='utf-8')
 
@@ -92,14 +59,8 @@ jobs:
 
           changelog_path = Path('CHANGELOG.md')
           changelog = changelog_path.read_text(encoding='utf-8')
-          changelog = '''## [v1.7.9] - 2026-10-18
-
-- 修复栗次元在 2026 年更新 JSON 接口后，旧的 `/json/?分类` 路径导致壁纸预取持续失败的问题；改用官方当前文档的 `/json?分类` 格式。
-- 壁纸批量预取失败时现在会记录首个具体异常与本批失败数量，便于排查网络、HTTP、JSON 或图片格式问题。
-- 保留 v1.7.8 的 `/motd wallpaper status` 与 `/motd wallpaper refill` 主动缓存命令。
-
-''' + changelog
-          changelog_path.write_text(changelog, encoding='utf-8')
+          prefix = "## [v1.7.9] - 2026-10-18\n\n- 修复栗次元在 2026 年更新 JSON 接口后，旧的 `/json/?分类` 路径导致壁纸预取持续失败的问题；改用官方当前文档的 `/json?分类` 格式。\n- 壁纸批量预取失败时现在会记录首个具体异常与本批失败数量，便于排查网络、HTTP、JSON 或图片格式问题。\n- 保留 v1.7.8 的 `/motd wallpaper status` 与 `/motd wallpaper refill` 主动缓存命令。\n\n"
+          changelog_path.write_text(prefix + changelog, encoding='utf-8')
 
           readme_path = Path('README.md')
           readme = readme_path.read_text(encoding='utf-8')
