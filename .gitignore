@@ -1,0 +1,8 @@
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+*.tmp
+dual_extracted.html
+new_template.html
+dual_template.html

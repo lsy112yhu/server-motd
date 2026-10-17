@@ -1,0 +1,92 @@
+{
+    "default_servers": {
+        "description": "默认查询的服务器列表（最多三个）",
+        "type": "list",
+        "hint": "不带参数使用 /motd 时并发查询这里配置的服务器。使用 /motd set1 <地址>、/motd set2 <地址> 和 /motd set3 <地址> 分别修改。",
+        "default": []
+    },
+    "default_server": {
+        "description": "旧版默认服务器地址（兼容项）",
+        "type": "string",
+        "hint": "仅用于自动迁移旧配置；请改用默认服务器列表或 /motd set1、/motd set2、/motd set3。",
+        "default": ""
+    },
+    "default_port": {
+        "description": "旧版默认服务器端口（兼容项）",
+        "type": "int",
+        "hint": "仅用于自动迁移旧配置；Java 默认端口为 25565。",
+        "default": 25565
+    },
+    "enable_all_sessions": {
+        "description": "对所有会话生效",
+        "type": "bool",
+        "hint": "开启后，所有群聊和私聊都可以使用此插件",
+        "default": true
+    },
+    "enabled_sessions": {
+        "description": "允许使用插件的会话列表",
+        "type": "list",
+        "hint": "当【对所有会话生效】关闭时，只有这些会话可以使用插件。会话ID格式: 平台名:消息类型:ID",
+        "default": []
+    },
+    "admin_only_config": {
+        "description": "仅管理员可修改配置",
+        "type": "bool",
+        "hint": "开启后，只有 AstrBot 平台配置中的管理员才能使用 /motd set1、/motd set2、/motd set3 和 /motd get。",
+        "default": true
+    },
+    "query_timeout": {
+        "description": "查询超时时间（秒）",
+        "type": "int",
+        "hint": "查询服务器时的超时时间，建议 5-10 秒",
+        "default": 5
+    },
+    "use_api": {
+        "description": "使用 API 查询服务器",
+        "type": "bool",
+        "hint": "开启后使用 mcstatus.io API 查询，更稳定可靠。关闭则使用直接连接查询。",
+        "default": true
+    },
+    "enable_random_wallpaper": {
+        "description": "启用随机壁纸背景",
+        "type": "bool",
+        "hint": "开启后，插件会在后台从 t.alcy.cc 预下载并压缩壁纸；查询只从本地缓存随机读取，不等待壁纸网站。",
+        "default": true
+    },
+    "enable_player_avatars": {
+        "description": "显示在线玩家头像",
+        "type": "bool",
+        "hint": "开启后，Java 版查询会按 UUID 或玩家名获取 Minecraft 皮肤头像；失败时自动使用本地占位，不影响状态卡。",
+        "default": true
+    },
+    "wallpaper_category": {
+        "description": "随机壁纸分类",
+        "type": "string",
+        "hint": "可选：moe（二次元）、pc（通用横图）、fj（风景）、bd（白底横图）、ys（原神）。无效值会回退为 moe。",
+        "default": "moe"
+    },
+    "wallpaper_timeout": {
+        "description": "后台壁纸下载超时（秒）",
+        "type": "int",
+        "hint": "范围 5-20 秒；仅用于后台预下载，不进入 MOTD 查询耗时。",
+        "default": 12
+    },
+    "wallpaper_cache_count": {
+        "description": "本地壁纸缓存数量",
+        "type": "int",
+        "hint": "后台持久化保存的 1280×720 压缩壁纸数量，范围 10-200；默认约 100 张。",
+        "default": 100
+    },
+    "wallpaper_prefetch_concurrency": {
+        "description": "壁纸预下载并发数",
+        "type": "int",
+        "hint": "后台补充壁纸缓存时的并发下载数，范围 1-6；不会阻塞 MOTD 查询。",
+        "default": 3
+    },
+    "render_timeout": {
+        "description": "图片渲染硬超时（秒）",
+        "type": "int",
+        "hint": "范围 5-60 秒；渲染会优先快速切换一次外部 HTML 节点。全部超时后不发送文本回退，避免一条查询等待数分钟。",
+        "default": 20
+    }
+}
