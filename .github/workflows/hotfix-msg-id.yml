@@ -1,0 +1,188 @@
+name: One-shot MSG_ID hotfix
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/hotfix-msg-id.yml
+
+permissions:
+  contents: write
+
+jobs:
+  hotfix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt jinja2
+
+      - name: Apply v1.7.7 hotfix
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected exactly one match, got {count}")
+              return text.replace(old, new, 1)
+
+          main_path = Path("main.py")
+          text = main_path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              'PLUGIN_VERSION = "1.7.6"',
+              'PLUGIN_VERSION = "1.7.7"',
+              "plugin version",
+          )
+
+          version_marker = '''# 版本号正则（匹配 1.x.y 或 1.x）
+          _VERSION_RE = re.compile(r'(\\d+\\.\\d+(?:\\.\\d+)?)')
+          '''
+          metadata_helper = '''# AstrBot/部分消息适配器可能把内部消息 ID 追加到纯文本末尾。
+          # 只清理“消息尾部”的 [MSG_ID:...]，避免误伤正常命令参数。
+          _MESSAGE_META_SUFFIX_RE = re.compile(
+              r"(?:\\s*\\[\\s*MSG_ID\\s*:\\s*[^\\]\\r\\n]*\\]\\s*)+$",
+              re.IGNORECASE,
+          )
+
+
+          def _strip_message_metadata(text: Any) -> str:
+              """移除消息尾部由框架/适配器附加的 [MSG_ID:...] 元数据。"""
+              value = str(text or "").strip()
+              while value:
+                  cleaned = _MESSAGE_META_SUFFIX_RE.sub("", value).strip()
+                  if cleaned == value:
+                      break
+                  value = cleaned
+              return value
+
+
+          # 版本号正则（匹配 1.x.y 或 1.x）
+          _VERSION_RE = re.compile(r'(\\d+\\.\\d+(?:\\.\\d+)?)')
+          '''
+          text = replace_once(text, version_marker, metadata_helper, "MSG_ID helper insertion")
+
+          parse_marker = '''        如果用户指定了地址但不带端口，使用标准端口（Java 25565 / 基岩 19132）
+                  """
+                  if ':' in address:
+          '''
+          parse_replacement = '''        如果用户指定了地址但不带端口，使用标准端口（Java 25565 / 基岩 19132）
+                  """
+                  address = _strip_message_metadata(address)
+                  if ':' in address:
+          '''
+          text = replace_once(text, parse_marker, parse_replacement, "address parser guard")
+
+          dispatch_old = '''        command = str(command or "").strip().lower()
+                  argument = str(argument or "").strip()
+          '''
+          dispatch_new = '''        command = str(command or "").strip().lower()
+                  argument = _strip_message_metadata(argument)
+          '''
+          text = replace_once(text, dispatch_old, dispatch_new, "dispatch sanitizer")
+
+          on_message_old = '''        message = event.message_str.strip()
+                  if not re.match(r'^/?(?:motd|在线)', message, re.IGNORECASE):
+          '''
+          on_message_new = '''        message = _strip_message_metadata(event.message_str)
+                  if not re.match(r'^/?(?:motd|在线)', message, re.IGNORECASE):
+          '''
+          text = replace_once(text, on_message_old, on_message_new, "message listener sanitizer")
+          main_path.write_text(text, encoding="utf-8")
+
+          tests_path = Path("tests/test_motd.py")
+          tests = tests_path.read_text(encoding="utf-8")
+          insertion_point = '''class VersionAndTemplateTests(unittest.TestCase):
+          '''
+          new_tests = '''class MessageMetadataTests(unittest.IsolatedAsyncioTestCase):
+              def test_strip_trailing_msg_id_metadata(self):
+                  self.assertEqual(
+                      motd._strip_message_metadata('/motd set1 pl.okmc.cc:55141 [MSG_ID:25565]'),
+                      '/motd set1 pl.okmc.cc:55141',
+                  )
+                  self.assertEqual(motd._strip_message_metadata('/motd [MSG_ID:123456]'), '/motd')
+                  self.assertEqual(
+                      motd._strip_message_metadata('/motd example.org:25565'),
+                      '/motd example.org:25565',
+                  )
+
+              def test_address_parser_defensively_ignores_msg_id_suffix(self):
+                  plugin = object.__new__(motd.MOTDPlugin)
+                  self.assertEqual(
+                      plugin._parse_server_address('pl.okmc.cc:55141 [MSG_ID:987654]', True),
+                      ('pl.okmc.cc', 55141),
+                  )
+
+              async def test_dispatch_strips_msg_id_from_set_and_empty_query(self):
+                  plugin = object.__new__(motd.MOTDPlugin)
+                  plugin._handle_motd_config = AsyncMock()
+                  plugin._do_motd_query_v2 = AsyncMock()
+                  event = types.SimpleNamespace(stop_event=lambda: None)
+
+                  await plugin._dispatch_motd(
+                      event, 'motd', 'set1 pl.okmc.cc:55141 [MSG_ID:25565]'
+                  )
+                  plugin._handle_motd_config.assert_awaited_once_with(
+                      event, 'set1', 'pl.okmc.cc:55141'
+                  )
+                  plugin._do_motd_query_v2.assert_not_awaited()
+
+                  plugin._handle_motd_config.reset_mock()
+                  plugin._do_motd_query_v2.reset_mock()
+                  await plugin._dispatch_motd(event, 'motd', '[MSG_ID:123456]')
+                  plugin._handle_motd_config.assert_not_awaited()
+                  plugin._do_motd_query_v2.assert_awaited_once_with(
+                      event, '', is_java=True
+                  )
+
+
+          class VersionAndTemplateTests(unittest.TestCase):
+          '''
+          tests = replace_once(tests, insertion_point, new_tests, "regression tests")
+          tests_path.write_text(tests, encoding="utf-8")
+
+          metadata_path = Path("metadata.yaml")
+          metadata = metadata_path.read_text(encoding="utf-8")
+          metadata = replace_once(metadata, "version: 1.7.6", "version: 1.7.7", "metadata version")
+          metadata_path.write_text(metadata, encoding="utf-8")
+
+          changelog_path = Path("CHANGELOG.md")
+          changelog = changelog_path.read_text(encoding="utf-8")
+          changelog = """## [v1.7.7] - 2026-10-18
+
+          - 修复 AstrBot/消息适配器在命令文本尾部附加 `[MSG_ID:...]` 时污染 MOTD 参数的问题；`/motd set1 <地址>` 不再被误判为多个地址。
+          - 修复无参数 `/motd` 被内部消息 ID 误解析成 `MSG_ID:25565` 并发起错误查询的问题。
+          - 在统一命令分发、全消息监听和地址解析入口加入尾部元数据清理，并新增对应回归测试。
+
+          """ + changelog
+          changelog_path.write_text(changelog, encoding="utf-8")
+
+          readme_path = Path("README.md")
+          readme = readme_path.read_text(encoding="utf-8")
+          if "[MOTD] 插件已加载 v1.7.6" in readme:
+              readme = readme.replace("[MOTD] 插件已加载 v1.7.6", "[MOTD] 插件已加载 v1.7.7", 1)
+          readme_path.write_text(readme, encoding="utf-8")
+
+      - name: Syntax check
+        run: python -m py_compile main.py tests/test_motd.py
+
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Commit hotfix and remove one-shot workflow
+        run: |
+          rm .github/workflows/hotfix-msg-id.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py tests/test_motd.py metadata.yaml CHANGELOG.md README.md .github/workflows/hotfix-msg-id.yml
+          git commit -m "fix: ignore AstrBot MSG_ID metadata in MOTD commands"
+          git push
