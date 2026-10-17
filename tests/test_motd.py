@@ -355,6 +355,9 @@ class PolicyTests(unittest.IsolatedAsyncioTestCase):
 
 
 class WallpaperCommandTests(unittest.IsolatedAsyncioTestCase):
+    def test_wallpaper_api_uses_current_json_endpoint(self):
+        self.assertEqual(motd.WALLPAPER_API_BASE, 'https://t.alcy.cc/json')
+
     async def test_wallpaper_refill_starts_manual_background_task(self):
         plugin = object.__new__(motd.MOTDPlugin)
         plugin.admin_only_config = False

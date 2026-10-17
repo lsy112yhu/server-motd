@@ -2,7 +2,7 @@
 
 一个用于查询 Minecraft 服务器状态的 AstrBot 卡片查询插件。支持 Java 版和基岩版服务器、ViaVersion/Velocity/BungeeCord 版本识别，并内置随机二次元壁纸背景与玩家头像网格渲染。
 
-> **1.7.8 地址访问规则**：默认仅查询公网地址。内网服需由管理员在 AstrBot WebUI 的「允许查询的内网服务器 IP/网段」中添加精确 IP 或 CIDR。白名单对所有获准使用插件的会话生效；图标下载始终拒绝内网地址。
+> **1.7.9 地址访问规则**：默认仅查询公网地址。内网服需由管理员在 AstrBot WebUI 的「允许查询的内网服务器 IP/网段」中添加精确 IP 或 CIDR。白名单对所有获准使用插件的会话生效；图标下载始终拒绝内网地址。
 
 ![插件输出图片效果预览图1](./assets/preview_java.png)
 ![插件输出图片效果预览图2](./assets/preview_bedrock.png)
@@ -135,7 +135,7 @@ git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_
 ## 🛠️ 故障排查
 
 1. **发送 `motd` 无响应**：
-   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.7.8`。
+   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.7.9`。
    - 确认发送者或群聊是否符合会话规则。
 2. **卡片图片无法渲染（提示超时或报错）**：
    - 确认宿主环境已安装 Playwright 依赖（`playwright install chromium`）。

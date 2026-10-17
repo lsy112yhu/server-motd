@@ -35,8 +35,8 @@ JAVA_DEFAULT_PORT = 25565
 BEDROCK_DEFAULT_PORT = 19132
 
 PLUGIN_NAME = "astrbot_plugin_minecraft_motd"
-PLUGIN_VERSION = "1.7.8"
-WALLPAPER_API_BASE = "https://t.alcy.cc/json/"
+PLUGIN_VERSION = "1.7.9"
+WALLPAPER_API_BASE = "https://t.alcy.cc/json"
 WALLPAPER_ALLOWED_HOSTS = {"t.alcy.cc", "tc.alcy.cc"}
 WALLPAPER_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
 WALLPAPER_MAX_BYTES = 6 * 1024 * 1024
@@ -2557,6 +2557,13 @@ class MOTDPlugin(Star):
                         *(self._fetch_random_wallpaper_bytes(session) for _ in range(batch_size)),
                         return_exceptions=True,
                     )
+                    failures = [item for item in results if isinstance(item, Exception)]
+                    if failures:
+                        first = failures[0]
+                        logger.warning(
+                            f"[MOTD] 壁纸下载失败: {type(first).__name__}: {first} "
+                            f"(本批失败 {len(failures)}/{len(results)})"
+                        )
                     added = 0
                     for result in results:
                         if not isinstance(result, bytes):
