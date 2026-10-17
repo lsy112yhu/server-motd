@@ -35,7 +35,7 @@ JAVA_DEFAULT_PORT = 25565
 BEDROCK_DEFAULT_PORT = 19132
 
 PLUGIN_NAME = "astrbot_plugin_minecraft_motd"
-PLUGIN_VERSION = "1.7.7"
+PLUGIN_VERSION = "1.7.8"
 WALLPAPER_API_BASE = "https://t.alcy.cc/json/"
 WALLPAPER_ALLOWED_HOSTS = {"t.alcy.cc", "tc.alcy.cc"}
 WALLPAPER_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -2056,6 +2056,7 @@ class MOTDPlugin(Star):
         self._last_wallpaper_path = ""
         self._avatar_cache: Dict[str, str] = {}
         self._wallpaper_prefetch_task: Optional[asyncio.Task] = None
+        self._wallpaper_manual_task: Optional[asyncio.Task] = None
         self._wallpaper_refill_lock = asyncio.Lock()
         self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME))
         self.wallpaper_cache_root = self.data_dir / "wallpaper_cache"
@@ -3156,6 +3157,74 @@ class MOTDPlugin(Star):
             f"total={time.monotonic() - flow_started:.2f}s"
         )
 
+    async def _handle_wallpaper_command(self, event: AstrMessageEvent, action: str = ""):
+        """查看或主动触发随机壁纸缓存预取。"""
+        if self.admin_only_config and not self._is_admin(event):
+            await event.send(event.plain_result("❌ 只有管理员才能管理壁纸缓存"))
+            return
+
+        action = str(action or "").strip().lower()
+        cached = len(await asyncio.to_thread(self._cached_wallpaper_paths))
+        auto_running = (
+            self._wallpaper_prefetch_task is not None
+            and not self._wallpaper_prefetch_task.done()
+        )
+        manual_running = (
+            self._wallpaper_manual_task is not None
+            and not self._wallpaper_manual_task.done()
+        )
+
+        if action in {"", "status", "get"}:
+            if manual_running:
+                state = "手动预取中"
+            elif auto_running:
+                state = "自动预取中"
+            elif cached >= self.wallpaper_cache_target:
+                state = "缓存已满"
+            else:
+                state = "空闲"
+            await event.send(event.plain_result(
+                "🖼️ 壁纸缓存状态\n"
+                f"分类: {self.wallpaper_category}\n"
+                f"缓存: {cached}/{self.wallpaper_cache_target}\n"
+                f"状态: {state}\n"
+                f"目录: {self.wallpaper_cache_dir}"
+            ))
+            return
+
+        if action in {"refill", "download", "fetch", "pull"}:
+            if not self.enable_random_wallpaper:
+                await event.send(event.plain_result(
+                    "❌ 随机壁纸功能当前已关闭，请先在 WebUI 配置中开启 enable_random_wallpaper"
+                ))
+                return
+            if cached >= self.wallpaper_cache_target:
+                await event.send(event.plain_result(
+                    f"✅ 壁纸缓存已经是满的：{cached}/{self.wallpaper_cache_target}"
+                ))
+                return
+            if manual_running:
+                await event.send(event.plain_result(
+                    f"⏳ 手动壁纸预取已经在运行：{cached}/{self.wallpaper_cache_target}"
+                ))
+                return
+
+            self._wallpaper_manual_task = asyncio.create_task(
+                self._prefetch_wallpaper_cache()
+            )
+            await event.send(event.plain_result(
+                "✅ 已立即启动壁纸缓存预取\n"
+                f"当前: {cached}/{self.wallpaper_cache_target}\n"
+                "任务会在后台运行，不会阻塞 MOTD 查询。可使用 /motd wallpaper status 查看进度。"
+            ))
+            return
+
+        await event.send(event.plain_result(
+            "❓ 壁纸缓存指令\n"
+            "  /motd wallpaper status - 查看缓存状态\n"
+            "  /motd wallpaper refill - 立即启动后台预取"
+        ))
+
     async def _handle_motd_config(self, event: AstrMessageEvent, action: str, value: str = ""):
         """处理 /motd set1、/motd set2 与 /motd get。"""
         if self.admin_only_config and not self._is_admin(event):
@@ -3347,7 +3416,9 @@ class MOTDPlugin(Star):
         argument = _strip_message_metadata(argument)
         if command == "motd":
             action, _, value = argument.partition(" ")
-            if action.lower() in {"set", "set1", "set2", "set3", "get", "remove", "rm", "del", "delete"}:
+            if action.lower() == "wallpaper":
+                await self._handle_wallpaper_command(event, value)
+            elif action.lower() in {"set", "set1", "set2", "set3", "get", "remove", "rm", "del", "delete"}:
                 await self._handle_motd_config(event, action, value)
             else:
                 await self._do_motd_query_v2(event, argument, is_java=True)
@@ -3490,8 +3561,10 @@ class MOTDPlugin(Star):
 
     async def terminate(self):
         """插件停用时取消后台壁纸预取。"""
-        task = self._wallpaper_prefetch_task
-        if task is not None and not task.done():
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        tasks = [self._wallpaper_prefetch_task, self._wallpaper_manual_task]
+        for task in tasks:
+            if task is not None and not task.done():
+                task.cancel()
+        await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
         self._wallpaper_prefetch_task = None
+        self._wallpaper_manual_task = None

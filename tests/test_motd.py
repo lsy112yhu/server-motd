@@ -354,6 +354,46 @@ class PolicyTests(unittest.IsolatedAsyncioTestCase):
             await runner.cleanup()
 
 
+class WallpaperCommandTests(unittest.IsolatedAsyncioTestCase):
+    async def test_wallpaper_refill_starts_manual_background_task(self):
+        plugin = object.__new__(motd.MOTDPlugin)
+        plugin.admin_only_config = False
+        plugin.enable_random_wallpaper = True
+        plugin.wallpaper_category = 'moe'
+        plugin.wallpaper_cache_target = 100
+        plugin.wallpaper_cache_dir = Path('/tmp/wallpaper-cache-test')
+        plugin._wallpaper_prefetch_task = None
+        plugin._wallpaper_manual_task = None
+        plugin._cached_wallpaper_paths = lambda: []
+        started = asyncio.Event()
+
+        async def fake_prefetch():
+            started.set()
+
+        plugin._prefetch_wallpaper_cache = fake_prefetch
+        event = types.SimpleNamespace(
+            send=AsyncMock(),
+            plain_result=lambda value: value,
+        )
+        await plugin._handle_wallpaper_command(event, 'refill')
+        await asyncio.wait_for(started.wait(), 1)
+        self.assertIsNotNone(plugin._wallpaper_manual_task)
+        await plugin._wallpaper_manual_task
+        self.assertIn('已立即启动壁纸缓存预取', event.send.await_args.args[0])
+
+    async def test_dispatch_routes_wallpaper_subcommand(self):
+        plugin = object.__new__(motd.MOTDPlugin)
+        plugin._handle_wallpaper_command = AsyncMock()
+        plugin._handle_motd_config = AsyncMock()
+        plugin._do_motd_query_v2 = AsyncMock()
+        event = types.SimpleNamespace(stop_event=lambda: None)
+
+        await plugin._dispatch_motd(event, 'motd', 'wallpaper status')
+        plugin._handle_wallpaper_command.assert_awaited_once_with(event, 'status')
+        plugin._handle_motd_config.assert_not_awaited()
+        plugin._do_motd_query_v2.assert_not_awaited()
+
+
 class MessageMetadataTests(unittest.IsolatedAsyncioTestCase):
     def test_strip_trailing_msg_id_metadata(self):
         self.assertEqual(
