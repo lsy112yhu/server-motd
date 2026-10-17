@@ -27,17 +27,23 @@
 ## 💻 环境要求与依赖安装
 
 ### 1. 基础环境
-- **Python**: `>= 3.10`（推荐 3.11 或 3.12）
-- **AstrBot**: `>= 3.4.0`
+- **Python**: 代码语法要求 `>=3.10`，推荐使用已完成运行验证的 **3.12**。3.10/3.11 仅完成语法检查，尚未完成完整运行验收；同时需满足所用 AstrBot 版本的 Python 要求。
+- **AstrBot**: 当前保守声明支持 `>=4.25.5,<5`，并在 `metadata.yaml` 中设置相同范围。起点依据已验证的 **4.25.5** 环境，不代表更早版本一定不能运行，也不代表范围内每个版本均已完成验证。
+
+已验证环境为 AstrBot **4.25.5 / Python 3.12**，覆盖插件加载、真实 Java 查询及模板渲染检查。尚未完成独立全新安装、多 AstrBot 版本和多消息平台的完整兼容性矩阵；真实基岩服务器联调也未完成。不要据此理解为任意 AstrBot 版本或平台均可直接使用。
+
+此前的 `AstrBot >=3.4.0` 声明已撤回：代码依赖的 `GreedyStr` 到 [AstrBot 3.5.15](https://github.com/AstrBotDevs/AstrBot/releases/tag/v3.5.15) 才加入，且仅有该接口并不足以证明旧版可完整运行本插件。
 
 ### 2. Python 依赖自动补齐
 本仓库根目录已包含标准 `requirements.txt`：
 ```text
 aiohttp>=3.8.0
-Pillow>=9.0.0
+Pillow>=9.1.0
 ```
 
 > **自动补齐**：当你在 AstrBot WebUI 插件管理中安装或从本仓库 Git 安装时，AstrBot 会**自动检测并安装**上述 Python 依赖，无需手动操作。
+
+Pillow 下限为 9.1.0，是因为壁纸处理使用了该版本加入的 [`Image.Resampling`](https://pillow.readthedocs.io/en/stable/releasenotes/9.1.0.html)。实际安装还需选择与当前 Python 版本兼容的 Pillow 版本。
 
 若处于特殊离线环境或需要手动补齐依赖，可在 AstrBot 运行环境中执行：
 ```bash
