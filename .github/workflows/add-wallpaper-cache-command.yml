@@ -1,0 +1,106 @@
+name: One-shot wallpaper cache command update
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/add-wallpaper-cache-command.yml
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install test dependencies
+        run: python -m pip install -r requirements.txt jinja2
+
+      - name: Apply v1.7.8 wallpaper cache command update
+        shell: python
+        run: |
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f"{label}: expected exactly one match, got {count}")
+              return text.replace(old, new, 1)
+
+          main_path = Path('main.py')
+          text = main_path.read_text(encoding='utf-8')
+          text = replace_once(
+              text,
+              'PLUGIN_VERSION = "1.7.7"',
+              'PLUGIN_VERSION = "1.7.8"',
+              'plugin version',
+          )
+
+          text = replace_once(
+              text,
+              '        self._wallpaper_prefetch_task: Optional[asyncio.Task] = None\n',
+              '        self._wallpaper_prefetch_task: Optional[asyncio.Task] = None\n        self._wallpaper_manual_task: Optional[asyncio.Task] = None\n',
+              'manual wallpaper task state',
+          )
+
+          handle_marker = '''    async def _handle_motd_config(self, event: AstrMessageEvent, action: str, value: str = ""):\n'''
+          wallpaper_handler = '''    async def _handle_wallpaper_command(self, event: AstrMessageEvent, action: str = ""):\n        """查看或主动触发随机壁纸缓存预取。"""\n        if self.admin_only_config and not self._is_admin(event):\n            await event.send(event.plain_result("❌ 只有管理员才能管理壁纸缓存"))\n            return\n\n        action = str(action or "").strip().lower()\n        cached = len(await asyncio.to_thread(self._cached_wallpaper_paths))\n        auto_running = (\n            self._wallpaper_prefetch_task is not None\n            and not self._wallpaper_prefetch_task.done()\n        )\n        manual_running = (\n            self._wallpaper_manual_task is not None\n            and not self._wallpaper_manual_task.done()\n        )\n\n        if action in {"", "status", "get"}:\n            if manual_running:\n                state = "手动预取中"\n            elif auto_running:\n                state = "自动预取中"\n            elif cached >= self.wallpaper_cache_target:\n                state = "缓存已满"\n            else:\n                state = "空闲"\n            await event.send(event.plain_result(\n                "🖼️ 壁纸缓存状态\\n"\n                f"分类: {self.wallpaper_category}\\n"\n                f"缓存: {cached}/{self.wallpaper_cache_target}\\n"\n                f"状态: {state}\\n"\n                f"目录: {self.wallpaper_cache_dir}"\n            ))\n            return\n\n        if action in {"refill", "download", "fetch", "pull"}:\n            if not self.enable_random_wallpaper:\n                await event.send(event.plain_result(\n                    "❌ 随机壁纸功能当前已关闭，请先在 WebUI 配置中开启 enable_random_wallpaper"\n                ))\n                return\n            if cached >= self.wallpaper_cache_target:\n                await event.send(event.plain_result(\n                    f"✅ 壁纸缓存已经是满的：{cached}/{self.wallpaper_cache_target}"\n                ))\n                return\n            if manual_running:\n                await event.send(event.plain_result(\n                    f"⏳ 手动壁纸预取已经在运行：{cached}/{self.wallpaper_cache_target}"\n                ))\n                return\n\n            self._wallpaper_manual_task = asyncio.create_task(\n                self._prefetch_wallpaper_cache()\n            )\n            await event.send(event.plain_result(\n                "✅ 已立即启动壁纸缓存预取\\n"\n                f"当前: {cached}/{self.wallpaper_cache_target}\\n"\n                "任务会在后台运行，不会阻塞 MOTD 查询。可使用 /motd wallpaper status 查看进度。"\n            ))\n            return\n\n        await event.send(event.plain_result(\n            "❓ 壁纸缓存指令\\n"\n            "  /motd wallpaper status - 查看缓存状态\\n"\n            "  /motd wallpaper refill - 立即启动后台预取"\n        ))\n\n'''
+          text = replace_once(text, handle_marker, wallpaper_handler + handle_marker, 'wallpaper command handler')
+
+          dispatch_old = '''        if command == "motd":\n            action, _, value = argument.partition(" ")\n            if action.lower() in {"set", "set1", "set2", "set3", "get", "remove", "rm", "del", "delete"}:\n                await self._handle_motd_config(event, action, value)\n            else:\n                await self._do_motd_query_v2(event, argument, is_java=True)\n'''
+          dispatch_new = '''        if command == "motd":\n            action, _, value = argument.partition(" ")\n            if action.lower() == "wallpaper":\n                await self._handle_wallpaper_command(event, value)\n            elif action.lower() in {"set", "set1", "set2", "set3", "get", "remove", "rm", "del", "delete"}:\n                await self._handle_motd_config(event, action, value)\n            else:\n                await self._do_motd_query_v2(event, argument, is_java=True)\n'''
+          text = replace_once(text, dispatch_old, dispatch_new, 'wallpaper dispatch route')
+
+          terminate_old = '''    async def terminate(self):\n        """插件停用时取消后台壁纸预取。"""\n        task = self._wallpaper_prefetch_task\n        if task is not None and not task.done():\n            task.cancel()\n            await asyncio.gather(task, return_exceptions=True)\n        self._wallpaper_prefetch_task = None\n'''
+          terminate_new = '''    async def terminate(self):\n        """插件停用时取消后台壁纸预取。"""\n        tasks = [self._wallpaper_prefetch_task, self._wallpaper_manual_task]\n        for task in tasks:\n            if task is not None and not task.done():\n                task.cancel()\n        await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)\n        self._wallpaper_prefetch_task = None\n        self._wallpaper_manual_task = None\n'''
+          text = replace_once(text, terminate_old, terminate_new, 'terminate manual wallpaper task')
+          main_path.write_text(text, encoding='utf-8')
+
+          tests_path = Path('tests/test_motd.py')
+          tests = tests_path.read_text(encoding='utf-8')
+          insertion_point = '''class MessageMetadataTests(unittest.IsolatedAsyncioTestCase):\n'''
+          new_tests = '''class WallpaperCommandTests(unittest.IsolatedAsyncioTestCase):\n    async def test_wallpaper_refill_starts_manual_background_task(self):\n        plugin = object.__new__(motd.MOTDPlugin)\n        plugin.admin_only_config = False\n        plugin.enable_random_wallpaper = True\n        plugin.wallpaper_category = 'moe'\n        plugin.wallpaper_cache_target = 100\n        plugin.wallpaper_cache_dir = Path('/tmp/wallpaper-cache-test')\n        plugin._wallpaper_prefetch_task = None\n        plugin._wallpaper_manual_task = None\n        plugin._cached_wallpaper_paths = lambda: []\n        started = asyncio.Event()\n\n        async def fake_prefetch():\n            started.set()\n\n        plugin._prefetch_wallpaper_cache = fake_prefetch\n        event = types.SimpleNamespace(\n            send=AsyncMock(),\n            plain_result=lambda value: value,\n        )\n        await plugin._handle_wallpaper_command(event, 'refill')\n        await asyncio.wait_for(started.wait(), 1)\n        self.assertIsNotNone(plugin._wallpaper_manual_task)\n        await plugin._wallpaper_manual_task\n        self.assertIn('已立即启动壁纸缓存预取', event.send.await_args.args[0])\n\n    async def test_dispatch_routes_wallpaper_subcommand(self):\n        plugin = object.__new__(motd.MOTDPlugin)\n        plugin._handle_wallpaper_command = AsyncMock()\n        plugin._handle_motd_config = AsyncMock()\n        plugin._do_motd_query_v2 = AsyncMock()\n        event = types.SimpleNamespace(stop_event=lambda: None)\n\n        await plugin._dispatch_motd(event, 'motd', 'wallpaper status')\n        plugin._handle_wallpaper_command.assert_awaited_once_with(event, 'status')\n        plugin._handle_motd_config.assert_not_awaited()\n        plugin._do_motd_query_v2.assert_not_awaited()\n\n\nclass MessageMetadataTests(unittest.IsolatedAsyncioTestCase):\n'''
+          tests = replace_once(tests, insertion_point, new_tests, 'wallpaper command tests')
+          tests_path.write_text(tests, encoding='utf-8')
+
+          metadata_path = Path('metadata.yaml')
+          metadata = metadata_path.read_text(encoding='utf-8')
+          metadata = replace_once(metadata, 'version: 1.7.7', 'version: 1.7.8', 'metadata version')
+          metadata_path.write_text(metadata, encoding='utf-8')
+
+          changelog_path = Path('CHANGELOG.md')
+          changelog = changelog_path.read_text(encoding='utf-8')
+          changelog = '''## [v1.7.8] - 2026-10-18\n\n- 新增管理员壁纸缓存命令：`/motd wallpaper status` 可查看缓存数量与后台任务状态。\n- 新增 `/motd wallpaper refill`（兼容 `download`/`fetch`/`pull`）用于立即启动一次后台缓存填充；不会阻塞 MOTD 查询。\n- 插件停用时会同时取消自动与手动壁纸预取任务。\n\n''' + changelog
+          changelog_path.write_text(changelog, encoding='utf-8')
+
+          readme_path = Path('README.md')
+          readme = readme_path.read_text(encoding='utf-8')
+          readme = readme.replace('> **1.7.7 地址访问规则**', '> **1.7.8 地址访问规则**', 1)
+          readme = readme.replace('[MOTD] 插件已加载 v1.7.7', '[MOTD] 插件已加载 v1.7.8', 1)
+          admin_row = '| `/motd get` | 查看当前已保存的默认服务器与配置 | `/motd get` |\n'
+          admin_rows = admin_row + '| `/motd wallpaper status` | 查看壁纸缓存数量与后台预取状态 | `/motd wallpaper status` |\n| `/motd wallpaper refill` | 立即启动一次后台壁纸缓存填充 | `/motd wallpaper refill` |\n'
+          readme = replace_once(readme, admin_row, admin_rows, 'README wallpaper command rows')
+          readme_path.write_text(readme, encoding='utf-8')
+
+      - name: Syntax check
+        run: python -m py_compile main.py tests/test_motd.py
+
+      - name: Run regression tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Commit update and remove one-shot workflow
+        run: |
+          rm .github/workflows/add-wallpaper-cache-command.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add main.py tests/test_motd.py metadata.yaml CHANGELOG.md README.md .github/workflows/add-wallpaper-cache-command.yml
+          git commit -m "feat: add manual wallpaper cache commands"
+          git push
