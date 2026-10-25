@@ -28,10 +28,16 @@ from astrbot.core.star.star_tools import StarTools
 from astrbot.core.star.filter.command import GreedyStr
 import astrbot.api.message_components as Comp
 
-from render_client import T2IRenderClient
-from group_config import (
-    valid_group_id, parse_addresses, parse_group_server_rows, serialize_group_servers,
-)
+try:
+    from .render_client import T2IRenderClient
+    from .group_config import (
+        valid_group_id, parse_addresses, parse_group_server_rows, serialize_group_servers,
+    )
+except ImportError:  # standalone unit-test loader
+    from render_client import T2IRenderClient
+    from group_config import (
+        valid_group_id, parse_addresses, parse_group_server_rows, serialize_group_servers,
+    )
 
 
 # Java 版标准端口
