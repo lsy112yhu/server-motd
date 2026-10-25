@@ -2,7 +2,7 @@
 
 一个用于查询 Minecraft 服务器状态的 AstrBot 卡片查询插件。支持 Java 版和基岩版服务器、ViaVersion/Velocity/BungeeCord 版本识别，并内置随机二次元壁纸背景与玩家头像网格渲染。
 
-> **1.7.9 地址访问规则**：默认仅查询公网地址。内网服需由管理员在 AstrBot WebUI 的「允许查询的内网服务器 IP/网段」中添加精确 IP 或 CIDR。白名单对所有获准使用插件的会话生效；图标下载始终拒绝内网地址。
+> **1.8.0 地址访问规则**：默认仅查询公网地址。内网服需由管理员在 AstrBot WebUI 的「允许查询的内网服务器 IP/网段」中添加精确 IP 或 CIDR。白名单对所有获准使用插件的会话生效；图标下载始终拒绝内网地址。
 
 ![插件输出图片效果预览图1](./assets/preview_java.png)
 ![插件输出图片效果预览图2](./assets/preview_bedrock.png)
@@ -103,7 +103,12 @@ git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_
 | `use_api` | bool | `true` | 优先通过 `mcstatus.io` API 查询，失败时自动降级直连 |
 | `private_server_allowlist` | list | `[]` | 允许查询的非公网 IP/CIDR；在连接前验证全部 DNS 结果并固定实际连接 IP，不接受域名 |
 | `enable_player_avatars` | bool | `true` | 是否显示在线玩家头像网格 |
-| `render_timeout` | int | `20` | HTML 图片渲染硬超时（秒） |
+| `render_timeout` | int | `20` | 所有端点尝试和框架回退共享的 HTML 图片渲染硬超时（秒） |
+| `group_servers` | list | `[]` | 按群绑定最多 3 台 Java 服务器，WebUI 每行填一条 `群号=地址1,地址2` |
+| `custom_t2i_endpoints` | list | `[]` | 自定义 T2I 端点，优先于 AstrBot 全局和官方池 |
+| `t2i_endpoint_timeout` | int | `10` | 单个渲染端点超时（秒） |
+| `t2i_endpoint_cooldown` | int | `300` | 失败端点冷却（秒） |
+| `render_client_mode` | string | `auto` | `auto` 插件智能切换+预算内回退；`astrbot` 仅用原版渲染 |
 
 ---
 
@@ -129,17 +134,39 @@ git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_
 | `/motd get` | 查看当前已保存的默认服务器与配置 | `/motd get` |
 | `/motd wallpaper status` | 查看壁纸缓存数量与后台预取状态 | `/motd wallpaper status` |
 | `/motd wallpaper refill` | 立即启动一次后台壁纸缓存填充 | `/motd wallpaper refill` |
+| `/motd group set <地址1,地址2>` | 在当前群绑定最多 3 台服务器（仅 AstrBot 管理员） | `/motd group set mc.a.com,mc2.a.com` |
+| `/motd group show` | 查看本群绑定或全局默认列表（仅 AstrBot 管理员） | `/motd group show` |
+| `/motd group clear` | 解绑本群并恢复使用全局默认（仅 AstrBot 管理员） | `/motd group clear` |
+
+---
+
+## 🧩 分群默认服务器（v1.8.0）
+
+在 **AstrBot → 插件管理 → server-motd → 插件配置** 中找到 `group_servers` 列表，新增两项示例：
+
+```text
+123456789=mc.a.com:25565,mc2.a.com
+987654321=play.b.net:25565
+```
+
+每项一行，一行一个群号，等号后用英文逗号分隔服务器（最多 3 台）。现有 AstrBot 配置 schema 采用列表项输入，**不是分别输入群号和地址的双字段表单**。保存并重新加载插件后生效。群 A 发送 `/motd` 或 `/在线` 返回 A 的服务器，群 B 返回 B 的；未绑定群或私聊仍查询 `default_servers`。显式 `/motd <地址>` 与全局 `set1/2/3` 完全不受影响。`motd-bedrock` 仍沿用全局默认基岩版查询行为。
+
+还可以由 **AstrBot 管理员** 在对应群直接发送 `/motd group set mc.a.com,mc2.a.com`、`/motd group show`、`/motd group clear`。指令会立即写入同一个配置字段，重启后保持生效。普通群管理员如果不是 AstrBot 管理员，不具有配置权限。当前只支持数字群号，且不区分跨平台的相同群号；如使用多个不同聊天平台，应确保群 ID 不冲突。非法地址在查询时仍受到原有 DNS 私网/allowlist 检查。
+
+## 🖼️ 图片渲染可靠性（v1.8.0）
+
+默认 `render_client_mode=auto`：优先使用 `custom_t2i_endpoints`，然后使用 AstrBot 全局 `t2i_endpoint`（若存在），最后使用官方动态端点池。每个端点有独立超时，失败后冷却，成功端点优先；官方池每 30 分钟在后台刷新。所有端点及 AstrBot 内置回退共享 `render_timeout` 总预算。纯网络故障且没有其他可用渲染节点时，仍可能无法发出图片；插件将记录错误而不发送文字降级。建议优先配置网络可达的自有渲染端点以获得更高可用性。
 
 ---
 
 ## 🛠️ 故障排查
 
 1. **发送 `motd` 无响应**：
-   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.7.9`。
+   - 检查 AstrBot 控制台日志，确认看到 `[MOTD] 插件已加载 v1.8.0`。
    - 确认发送者或群聊是否符合会话规则。
 2. **卡片图片无法渲染（提示超时或报错）**：
    - 确认宿主环境已安装 Playwright 依赖（`playwright install chromium`）。
-   - 可在插件配置中将 `render_timeout` 适当调大（例如 25 秒）。
+   - 检查日志中的渲染端点失败/冷却信息；调整 `t2i_endpoint_timeout` 或配置稳定的 `custom_t2i_endpoints`，避免盲目调大 `render_timeout`。
 3. **玩家头像显示为默认灰色问号**：
    - 正常现象，当服务器为离线模式（盗版服）或第三方皮肤站、玩家 UUID 无法在官方 Mojang/Minotar 解析时，插件会自动显示本地兜底占位图，不影响整体排版。
 
