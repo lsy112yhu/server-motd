@@ -28,6 +28,17 @@ from astrbot.core.star.star_tools import StarTools
 from astrbot.core.star.filter.command import GreedyStr
 import astrbot.api.message_components as Comp
 
+try:
+    from .render_client import T2IRenderClient
+    from .group_config import (
+        valid_group_id, parse_addresses, parse_group_server_rows, serialize_group_servers,
+    )
+except ImportError:  # standalone unit-test loader
+    from render_client import T2IRenderClient
+    from group_config import (
+        valid_group_id, parse_addresses, parse_group_server_rows, serialize_group_servers,
+    )
+
 
 # Java 版标准端口
 JAVA_DEFAULT_PORT = 25565
@@ -35,7 +46,7 @@ JAVA_DEFAULT_PORT = 25565
 BEDROCK_DEFAULT_PORT = 19132
 
 PLUGIN_NAME = "astrbot_plugin_minecraft_motd"
-PLUGIN_VERSION = "1.7.9"
+PLUGIN_VERSION = "1.8.0"
 WALLPAPER_API_BASE = "https://t.alcy.cc/json"
 WALLPAPER_ALLOWED_HOSTS = {"t.alcy.cc", "tc.alcy.cc"}
 WALLPAPER_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -2058,6 +2069,7 @@ class MOTDPlugin(Star):
         self._wallpaper_prefetch_task: Optional[asyncio.Task] = None
         self._wallpaper_manual_task: Optional[asyncio.Task] = None
         self._wallpaper_refill_lock = asyncio.Lock()
+        self._render_pool_task: Optional[asyncio.Task] = None
         self.data_dir = Path(StarTools.get_data_dir(PLUGIN_NAME))
         self.wallpaper_cache_root = self.data_dir / "wallpaper_cache"
         self.wallpaper_cache_root.mkdir(parents=True, exist_ok=True)
@@ -2092,6 +2104,10 @@ class MOTDPlugin(Star):
             self.default_server, self.default_port = self._parse_server_address(
                 self.default_servers[0], is_java=True
             )
+        self.group_servers = parse_group_server_rows(
+            self.config.get("group_servers", []), self._parse_server_address,
+            self._join_server_address, logger,
+        )
         self.enabled_sessions = self.config.get("enabled_sessions", [])
         self.enable_all_sessions = self.config.get("enable_all_sessions", True)
         self.admin_only_config = self.config.get("admin_only_config", True)
@@ -2128,6 +2144,36 @@ class MOTDPlugin(Star):
         except (TypeError, ValueError):
             render_timeout = 20
         self.render_timeout = max(5, min(render_timeout, 60))
+        raw_mode = str(self.config.get("render_client_mode", "auto") or "auto").lower()
+        self.render_client_mode = raw_mode if raw_mode in {"auto", "astrbot"} else "auto"
+        try:
+            endpoint_timeout = int(self.config.get("t2i_endpoint_timeout", 10))
+        except (ValueError, TypeError):
+            endpoint_timeout = 10
+        try:
+            cooldown = int(self.config.get("t2i_endpoint_cooldown", 300))
+        except (ValueError, TypeError):
+            cooldown = 300
+        self.t2i_endpoint_timeout = max(1, min(endpoint_timeout, 60))
+        self.t2i_endpoint_cooldown = max(0, min(cooldown, 3600))
+        custom = self.config.get("custom_t2i_endpoints", [])
+        if isinstance(custom, str):
+            custom = [custom]
+        if not isinstance(custom, list):
+            custom = []
+        global_endpoint = ""
+        try:
+            global_config = self.context.get_config()
+            global_endpoint = str(global_config.get("t2i_endpoint") or "") if global_config else ""
+        except (AttributeError, TypeError, KeyError):
+            pass
+        self._t2i_client = T2IRenderClient(
+            custom_endpoints=custom,
+            global_endpoint=global_endpoint,
+            endpoint_timeout=self.t2i_endpoint_timeout,
+            cooldown=self.t2i_endpoint_cooldown,
+            logger=logger,
+        )
         self.wallpaper_cache_dir = self.wallpaper_cache_root / self.wallpaper_category
         self.wallpaper_cache_dir.mkdir(parents=True, exist_ok=True)
         
@@ -2140,7 +2186,8 @@ class MOTDPlugin(Star):
             f"prefetch_concurrency={self.wallpaper_prefetch_concurrency}, "
             f"download_timeout={self.wallpaper_timeout}s"
         )
-        logger.info(f"[MOTD] HTML 渲染硬超时: {self.render_timeout}s")
+        logger.info(f"[MOTD] HTML 渲染硬超时: {self.render_timeout}s, mode={self.render_client_mode}")
+        logger.info(f"[MOTD] 分群服务器配置数: {len(self.group_servers)}")
     
     def _is_admin(self, event: AstrMessageEvent) -> bool:
         """检查用户是否为管理员"""
@@ -2891,6 +2938,98 @@ class MOTDPlugin(Star):
                 "motd_html": motd_html,
             }
 
+    def _default_servers_for_event(self, event: AstrMessageEvent, is_java: bool):
+        """Resolve each query independently; never store the active group globally."""
+        if is_java:
+            try:
+                group_id = valid_group_id(event.get_group_id())
+            except (AttributeError, TypeError):
+                group_id = ""
+            if group_id and self.group_servers.get(group_id):
+                return list(self.group_servers[group_id][:3])
+            return list(self.default_servers[:3])
+        return list(self.default_servers[:1])
+
+    async def _render_card(self, template: str, context: Dict[str, Any]):
+        """One deadline for both plugin render attempts and framework fallback."""
+        if self.render_client_mode == "astrbot":
+            try:
+                return await asyncio.wait_for(
+                    self.html_render(template, context, options={"full_page": True}),
+                    timeout=self.render_timeout,
+                )
+            except (Exception, asyncio.TimeoutError) as exc:
+                logger.error("[MOTD] AstrBot 内置渲染失败: %s", exc)
+                return None
+
+        return await self._t2i_client.render(
+            template,
+            context,
+            total_timeout=self.render_timeout,
+            fallback=lambda: self.html_render(
+                template, context, options={"full_page": True}
+            ),
+        )
+
+    async def _handle_group_config(self, event: AstrMessageEvent, arguments: str):
+        """Group administration, persistent and synchronized with WebUI rows."""
+        if not self._check_session_allowed(event):
+            return
+        if not self._is_admin(event):
+            await event.send(event.plain_result("❌ 仅 AstrBot 管理员可修改或查看分群服务器配置"))
+            return
+        try:
+            group_id = valid_group_id(event.get_group_id())
+        except (AttributeError, TypeError):
+            group_id = ""
+        if not group_id:
+            await event.send(event.plain_result("❌ 此指令仅能在支持数字群号的群聊中使用"))
+            return
+        action, _, value = str(arguments or "").strip().partition(" ")
+        action = action.lower()
+        if action in {"show", "get", ""}:
+            addresses = self.group_servers.get(group_id)
+            label = "本群专属服务器" if addresses else "未绑定，使用全局默认服务器"
+            addresses = addresses or self.default_servers
+            detail = "\n".join(f"  {i}. {addr}" for i, addr in enumerate(addresses, 1)) or "  未设置"
+            await event.send(event.plain_result(f"📋 {label}\n群号: {group_id}\n{detail}"))
+            return
+        if action not in {"set", "clear"} or (action == "clear" and value.strip()):
+            await event.send(event.plain_result(
+                "❓ 用法：/motd group set <地址1,地址2,地址3>\n"
+                "/motd group show\n/motd group clear"
+            ))
+            return
+        if action == "set":
+            addresses = parse_addresses(
+                ",".join(value.split()), self._parse_server_address, self._join_server_address, logger
+            )
+            if not addresses:
+                await event.send(event.plain_result("❌ 未找到有效服务器地址，未保存"))
+                return
+        old_groups = {key: list(values) for key, values in self.group_servers.items()}
+        new_groups = {key: list(values) for key, values in old_groups.items()}
+        if action == "clear":
+            new_groups.pop(group_id, None)
+        else:
+            new_groups[group_id] = addresses
+        previous_rows = self.config.get("group_servers", None)
+        self.config["group_servers"] = serialize_group_servers(new_groups)
+        try:
+            self.config.save_config()
+        except Exception as exc:
+            if previous_rows is None:
+                self.config.pop("group_servers", None)
+            else:
+                self.config["group_servers"] = previous_rows
+            logger.error("[MOTD] 分群服务器保存失败: %s", exc)
+            await event.send(event.plain_result("❌ 配置保存失败，请查看日志"))
+            return
+        self.group_servers = new_groups
+        await event.send(event.plain_result(
+            f"✅ 已{'清除' if action == 'clear' else '保存'}群 {group_id} 的服务器绑定"
+        ))
+
     async def _do_motd_query(self, event: AstrMessageEvent, server: str = "", is_java: bool = True):
         """执行 MOTD 查询的核心逻辑"""
         flow_started = time.monotonic()
@@ -2978,43 +3117,7 @@ class MOTDPlugin(Star):
         context["queried_at"] = time.strftime("%H:%M:%S")
         context["plugin_version"] = PLUGIN_VERSION
         render_started = time.monotonic()
-        url = None
-        # AstrBot's network renderer selects an endpoint per call. Do not let one
-        # stalled endpoint consume the whole render budget: cancel it early and
-        # give a fresh call a chance to select another healthy endpoint.
-        if self.render_timeout >= 10:
-            first_attempt_timeout = min(8, self.render_timeout - 5)
-            render_attempt_timeouts = [first_attempt_timeout, self.render_timeout - first_attempt_timeout]
-        else:
-            render_attempt_timeouts = [self.render_timeout]
-
-        for attempt, attempt_timeout in enumerate(render_attempt_timeouts, start=1):
-            try:
-                url = await asyncio.wait_for(
-                    self.html_render(
-                        MOTD_HTML_TEMPLATE,
-                        context,
-                        options={"full_page": True},
-                    ),
-                    timeout=attempt_timeout,
-                )
-                logger.info(
-                    f"[MOTD] 阶段耗时: html_render="
-                    f"{time.monotonic() - render_started:.2f}s, "
-                    f"attempt={attempt}/{len(render_attempt_timeouts)}"
-                )
-                break
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"[MOTD] HTML 渲染尝试 {attempt}/{len(render_attempt_timeouts)} "
-                    f"超过 {attempt_timeout}s，切换渲染节点重试"
-                )
-            except Exception as exc:
-                logger.warning(
-                    f"[MOTD] HTML 渲染尝试 {attempt}/{len(render_attempt_timeouts)} 失败，"
-                    f"切换渲染节点重试: {exc}"
-                )
-
+        url = await self._render_card(MOTD_HTML_TEMPLATE, context)
         if url:
             send_started = time.monotonic()
             await event.send(event.image_result(url))
@@ -3082,7 +3185,7 @@ class MOTDPlugin(Star):
             host, port = self._parse_server_address(explicit_server, is_java=is_java)
             addresses = [self._join_server_address(host, port)]
         else:
-            addresses = self.default_servers[:3] if is_java else self.default_servers[:1]
+            addresses = self._default_servers_for_event(event, is_java)
             if not addresses:
                 await event.send(event.plain_result(
                     "❌ 未设置默认服务器\n"
@@ -3122,39 +3225,7 @@ class MOTDPlugin(Star):
 
         render_context["plugin_version"] = PLUGIN_VERSION
         render_started = time.monotonic()
-        url = None
-        if self.render_timeout >= 10:
-            first_attempt_timeout = min(8, self.render_timeout - 5)
-            render_attempt_timeouts = [first_attempt_timeout, self.render_timeout - first_attempt_timeout]
-        else:
-            render_attempt_timeouts = [self.render_timeout]
-
-        for attempt, attempt_timeout in enumerate(render_attempt_timeouts, start=1):
-            try:
-                url = await asyncio.wait_for(
-                    self.html_render(
-                        render_template,
-                        render_context,
-                        options={"full_page": True},
-                    ),
-                    timeout=attempt_timeout,
-                )
-                logger.info(
-                    f"[MOTD] 组合卡片渲染完成: servers={len(contexts)}, "
-                    f"elapsed={time.monotonic() - render_started:.2f}s, "
-                    f"attempt={attempt}/{len(render_attempt_timeouts)}"
-                )
-                break
-            except asyncio.TimeoutError:
-                logger.warning(
-                    f"[MOTD] HTML 渲染尝试 {attempt}/{len(render_attempt_timeouts)} "
-                    f"超过 {attempt_timeout}s，切换渲染节点重试"
-                )
-            except Exception as exc:
-                logger.warning(
-                    f"[MOTD] HTML 渲染尝试 {attempt}/{len(render_attempt_timeouts)} 失败: {exc}"
-                )
-
+        url = await self._render_card(render_template, render_context)
         if url:
             await event.send(event.image_result(url))
         else:
@@ -3425,6 +3496,8 @@ class MOTDPlugin(Star):
             action, _, value = argument.partition(" ")
             if action.lower() == "wallpaper":
                 await self._handle_wallpaper_command(event, value)
+            elif action.lower() == "group":
+                await self._handle_group_config(event, value)
             elif action.lower() in {"set", "set1", "set2", "set3", "get", "remove", "rm", "del", "delete"}:
                 await self._handle_motd_config(event, action, value)
             else:
@@ -3552,6 +3625,8 @@ class MOTDPlugin(Star):
     @filter.on_astrbot_loaded()
     async def on_astrbot_loaded(self):
         """Bot 初始化完成时"""
+        if self.render_client_mode == "auto" and self._render_pool_task is None:
+            self._render_pool_task = asyncio.create_task(self._t2i_client.refresh_loop())
         cached = len(await asyncio.to_thread(self._cached_wallpaper_paths))
         self._ensure_wallpaper_prefetch()
         logger.info("=" * 50)
@@ -3568,10 +3643,11 @@ class MOTDPlugin(Star):
 
     async def terminate(self):
         """插件停用时取消后台壁纸预取。"""
-        tasks = [self._wallpaper_prefetch_task, self._wallpaper_manual_task]
+        tasks = [self._wallpaper_prefetch_task, self._wallpaper_manual_task, self._render_pool_task]
         for task in tasks:
             if task is not None and not task.done():
                 task.cancel()
         await asyncio.gather(*(task for task in tasks if task is not None), return_exceptions=True)
         self._wallpaper_prefetch_task = None
         self._wallpaper_manual_task = None
+        self._render_pool_task = None

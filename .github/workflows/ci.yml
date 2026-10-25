@@ -1,0 +1,25 @@
+name: MOTD regression tests
+
+on:
+  push:
+    branches:
+      - feat/v1.8.0-render-group
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --upgrade pip
+      - run: pip install -r requirements.txt jinja2
+      - name: Compile plugin
+        run: python -m compileall -q main.py group_config.py render_client.py tests
+      - name: Run regression suite
+        run: python -m unittest discover -s tests -v
