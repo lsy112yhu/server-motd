@@ -14,7 +14,21 @@ import aiohttp
 
 OFFICIAL_POOL_URL = "https://api.soulter.top/astrbot/t2i-endpoints"
 DEFAULT_ENDPOINT = "https://t2i.soulter.top/text2img"
-IMAGE_ID_RE = re.compile(r"^[A-Za-z0-9._-]{1,256}$")
+_IMAGE_ID_SEGMENT_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _valid_image_id(value):
+    """Render ids are relative paths (e.g. ``data/rendered_x.png`` from the
+    official-style services); accept path segments but block traversal."""
+    if not isinstance(value, (str, int)):
+        return False
+    image_id = str(value)
+    if not image_id or len(image_id) > 256 or "\\" in image_id:
+        return False
+    return all(
+        segment not in {"", ".", ".."} and _IMAGE_ID_SEGMENT_RE.fullmatch(segment)
+        for segment in image_id.split("/")
+    )
 _LOG = logging.getLogger("astrbot")
 
 
@@ -136,7 +150,7 @@ class T2IRenderClient:
                     raise ValueError(f"HTTP {resp.status}")
                 body = await resp.json(content_type=None)
                 image_id = body.get("data", {}).get("id") if isinstance(body, dict) and isinstance(body.get("data"), dict) else None
-                if not isinstance(image_id, (str, int)) or not IMAGE_ID_RE.fullmatch(str(image_id)):
+                if not _valid_image_id(image_id):
                     raise ValueError("invalid render id")
                 # AstrBot v4.26.7 appends /{id}, not /data/{id}.
                 return f"{endpoint}/{image_id}"

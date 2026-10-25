@@ -122,12 +122,13 @@ class T2IClientTests(unittest.IsolatedAsyncioTestCase):
         self.slow = False
         self.hits = 0
         self.received = None
+        self.image_id = "test-id"
         async def generate(request):
             self.hits += 1
             self.received = await request.json()
             if self.slow:
                 await asyncio.sleep(2)
-            return web.json_response({"data": {"id": "test-id"}})
+            return web.json_response({"data": {"id": self.image_id}})
         app = web.Application()
         app.router.add_post("/text2img/generate", generate)
         self.runner = web.AppRunner(app)
@@ -152,6 +153,22 @@ class T2IClientTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(client._last_success, self.endpoint)
         self.assertEqual(await client.render("ok", {}, 4), self.endpoint + "/test-id")
         self.assertEqual(self.hits, 2)
+
+    async def test_path_style_render_id_accepted(self):
+        # Official-style services return relative paths, e.g. data/rendered_x.png.
+        self.image_id = "data/rendered_42.png"
+        client = T2IRenderClient(
+            custom_endpoints=[self.endpoint], endpoint_timeout=2, cooldown=300
+        )
+        url = await client.render("<html>ok</html>", {}, 4)
+        self.assertEqual(url, self.endpoint + "/data/rendered_42.png")
+
+    async def test_traversal_render_id_rejected(self):
+        self.image_id = "../../etc/passwd"
+        client = T2IRenderClient(
+            custom_endpoints=[self.endpoint], endpoint_timeout=2, cooldown=300
+        )
+        self.assertIsNone(await client.render("<html>ok</html>", {}, 4))
 
     async def test_total_deadline_including_fallback(self):
         client = T2IRenderClient(custom_endpoints=[self.endpoint], endpoint_timeout=1)
