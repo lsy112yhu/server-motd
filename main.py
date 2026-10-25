@@ -2991,13 +2991,13 @@ class MOTDPlugin(Star):
             addresses = self.group_servers.get(group_id)
             label = "本群专属服务器" if addresses else "未绑定，使用全局默认服务器"
             addresses = addresses or self.default_servers
-            detail = "\\n".join(f"  {i}. {addr}" for i, addr in enumerate(addresses, 1)) or "  未设置"
-            await event.send(event.plain_result(f"📋 {label}\\n群号: {group_id}\\n{detail}"))
+            detail = "\n".join(f"  {i}. {addr}" for i, addr in enumerate(addresses, 1)) or "  未设置"
+            await event.send(event.plain_result(f"📋 {label}\n群号: {group_id}\n{detail}"))
             return
         if action not in {"set", "clear"} or (action == "clear" and value.strip()):
             await event.send(event.plain_result(
-                "❓ 用法：/motd group set <地址1,地址2,地址3>\\n"
-                "/motd group show\\n/motd group clear"
+                "❓ 用法：/motd group set <地址1,地址2,地址3>\n"
+                "/motd group show\n/motd group clear"
             ))
             return
         if action == "set":
