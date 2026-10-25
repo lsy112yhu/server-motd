@@ -94,5 +94,35 @@
         "type": "int",
         "hint": "范围 5-60 秒；渲染会优先快速切换一次外部 HTML 节点。全部超时后不发送文本回退，避免一条查询等待数分钟。",
         "default": 20
+    },
+    "group_servers": {
+        "description": "分群服务器列表（WebUI 每行添加一个群）",
+        "type": "list",
+        "hint": "每项一行：群号=服务器1,服务器2,服务器3；例如 123456789=mc.example.com:25565,mc2.example.com。不带参数的 /motd、/在线 自动按群查询，未绑定群使用全局默认列表。群内 AstrBot 管理员也可用 /motd group set/show/clear 修改。",
+        "default": []
+    },
+    "custom_t2i_endpoints": {
+        "description": "自定义图片渲染端点（优先使用）",
+        "type": "list",
+        "hint": "一行一个完整 URL，示例 https://host/text2img；首选成功端点，失败自动冷却切换。空列表使用 AstrBot 配置和官方节点。",
+        "default": []
+    },
+    "t2i_endpoint_timeout": {
+        "description": "单个图片渲染端点超时（秒）",
+        "type": "int",
+        "hint": "单端点全程超时；受 render_timeout 总预算限制，默认 10 秒。",
+        "default": 10
+    },
+    "t2i_endpoint_cooldown": {
+        "description": "失败图片渲染端点冷却（秒）",
+        "type": "int",
+        "hint": "失败端点暂时跳过；所有端点都冷却时仅探测最早到期的一个。默认 300 秒。",
+        "default": 300
+    },
+    "render_client_mode": {
+        "description": "图片渲染客户端模式",
+        "type": "string",
+        "hint": "auto: 插件优先健康端点并在剩余预算内回退；astrbot: 仅使用原版 AstrBot 渲染。",
+        "default": "auto"
     }
 }
