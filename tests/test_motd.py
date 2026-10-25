@@ -254,7 +254,8 @@ class NetworkTests(unittest.IsolatedAsyncioTestCase):
         with tempfile.TemporaryDirectory() as directory, patch.object(motd.StarTools, 'get_data_dir', return_value=directory):
             config = {'default_servers': [f'127.0.0.1:{self.port}'] * 2,
                       'private_server_allowlist': ALLOW_LOCAL, 'use_api': False,
-                      'enable_random_wallpaper': False, 'enable_player_avatars': False}
+                      'enable_random_wallpaper': False, 'enable_player_avatars': False,
+                      'render_client_mode': 'astrbot'}
             plugin = motd.MOTDPlugin(None, config)
             rendered = []
             async def render(template, context, **kwargs):
@@ -277,7 +278,7 @@ class NetworkTests(unittest.IsolatedAsyncioTestCase):
             await plugin.on_message(event)
             self.assertEqual(len(rendered[-1][1]['servers']), 3)
             self.assertIn('MC-MOTD-V' + motd.PLUGIN_VERSION, rendered[-1][2])
-            self.assertNotIn('MC-MOTD-V1.8.0', rendered[-1][2])
+            self.assertNotIn('MC-MOTD-V1.7.9', rendered[-1][2])
 
 
 class PolicyTests(unittest.IsolatedAsyncioTestCase):
