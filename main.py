@@ -46,7 +46,7 @@ JAVA_DEFAULT_PORT = 25565
 BEDROCK_DEFAULT_PORT = 19132
 
 PLUGIN_NAME = "astrbot_plugin_minecraft_motd"
-PLUGIN_VERSION = "1.8.0"
+PLUGIN_VERSION = "1.8.1"
 WALLPAPER_API_BASE = "https://t.alcy.cc/json"
 WALLPAPER_ALLOWED_HOSTS = {"t.alcy.cc", "tc.alcy.cc"}
 WALLPAPER_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -2066,6 +2066,7 @@ class MOTDPlugin(Star):
         self._last_wallpaper_src = ""
         self._last_wallpaper_path = ""
         self._avatar_cache: Dict[str, str] = {}
+        self._premium_uuid_cache: Dict[str, str] = {}
         self._wallpaper_prefetch_task: Optional[asyncio.Task] = None
         self._wallpaper_manual_task: Optional[asyncio.Task] = None
         self._wallpaper_refill_lock = asyncio.Lock()
@@ -2701,16 +2702,57 @@ class MOTDPlugin(Star):
             return self._last_wallpaper_src
 
     def _player_avatar_identity(self, player: Dict[str, Any]) -> Tuple[str, str]:
-        """返回经过严格校验的头像标识和缓存键，UUID 优先。"""
+        """返回经过严格校验的头像标识和缓存键。
+
+        仅接受 Mojang 签发的 v4 UUID：离线模式后端返回的样本 UUID 是由名字
+        派生的 v3（或全零），在 Mojang 体系中查无此人，头像源只会回默认
+        史蒂夫皮肤。这类样本改用玩家名，后续再解析为正版 UUID。
+        """
         raw_id = str(player.get("uuid") or player.get("id") or "").strip()
         uuid = re.sub(r"-", "", raw_id).lower()
-        if re.fullmatch(r"[0-9a-f]{32}", uuid):
+        if re.fullmatch(r"[0-9a-f]{32}", uuid) and uuid[12] == "4" and uuid[16] in "89ab":
             return uuid, f"uuid:{uuid}"
 
         raw_name = re.sub(r"§[0-9A-FK-ORa-fk-or]", "", str(player.get("name") or "")).strip()
         if re.fullmatch(r"[A-Za-z0-9_]{1,16}", raw_name):
             return raw_name, f"name:{raw_name.lower()}"
         return "", ""
+
+    async def _resolve_premium_uuid(
+        self,
+        session: aiohttp.ClientSession,
+        name: str,
+    ) -> Optional[str]:
+        """把玩家名解析为正版 UUID：查无此名返回 ""，查询失败返回 None。结果带缓存。"""
+        cache_key = name.lower()
+        if cache_key in self._premium_uuid_cache:
+            return self._premium_uuid_cache[cache_key]
+
+        encoded = quote(name, safe="")
+        lookup_urls = [
+            f"https://api.minecraftservices.com/minecraft/profile/lookup/name/{encoded}",
+            f"https://api.mojang.com/users/profiles/minecraft/{encoded}",
+        ]
+        resolved: Optional[str] = None
+        for url in lookup_urls:
+            try:
+                async with session.get(url, headers={"Accept": "application/json"}) as resp:
+                    if resp.status == 200:
+                        data = await resp.json(content_type=None)
+                        candidate = re.sub(r"-", "", str(data.get("id") or "")).lower()
+                        resolved = candidate if re.fullmatch(r"[0-9a-f]{32}", candidate) else ""
+                        break
+                    if resp.status in (400, 404):
+                        resolved = ""
+                        break
+            except Exception as e:
+                logger.info(f"[MOTD] Mojang 名字解析失败: host={urlparse(url).hostname}, error={e}")
+
+        if resolved is not None:
+            if len(self._premium_uuid_cache) >= 256:
+                self._premium_uuid_cache.pop(next(iter(self._premium_uuid_cache)))
+            self._premium_uuid_cache[cache_key] = resolved
+        return resolved
 
     async def _fetch_player_avatar(
         self,
@@ -2725,6 +2767,14 @@ class MOTDPlugin(Star):
         cached = self._avatar_cache.get(cache_key)
         if cached:
             return cached
+
+        if cache_key.startswith("name:"):
+            resolved = await self._resolve_premium_uuid(session, identifier)
+            if resolved == "":
+                # 非正版名无皮肤可查，不拿头像源的默认史蒂夫冒充真人头像
+                return ""
+            if resolved:
+                identifier = resolved
 
         encoded = quote(identifier, safe="")
         urls = [
