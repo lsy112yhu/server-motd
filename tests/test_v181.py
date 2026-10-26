@@ -163,15 +163,27 @@ class FetchTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("f4706c34d91a4576a9755ee892b90f26", avatar_urls[0])
         self.assertNotIn("7f792ff7", avatar_urls[0])
 
-    async def test_unknown_name_gets_no_steve(self):
+    async def test_unknown_name_falls_back_to_steve(self):
         plugin = make_plugin()
         session = FakeSession([
             ("api.minecraftservices.com", _Response(
                 "https://api.minecraftservices.com/minecraft/profile/lookup/name/Cracked99", status=404)),
+            ("mc-heads.net", png_response("https://mc-heads.net/avatar/MHF_Steve/64.png")),
         ])
         result = await self.fetch(plugin, session, {"id": V3_UUID, "name": "Cracked99"})
-        self.assertEqual(result, "")
-        self.assertFalse(any("mc-heads" in u or "minotar" in u for u in session.requested))
+        self.assertTrue(result.startswith("data:image/png;base64,"))
+        avatar_urls = [u for u in session.requested if "mc-heads" in u or "minotar" in u]
+        self.assertTrue(any("MHF_Steve" in u for u in avatar_urls))
+
+    async def test_anonymous_entry_falls_back_to_steve(self):
+        plugin = make_plugin()
+        session = FakeSession([
+            ("mc-heads.net", png_response("https://mc-heads.net/avatar/MHF_Steve/64.png")),
+        ])
+        result = await self.fetch(plugin, session, {"id": ZERO_UUID, "name": "Anonymous Player"})
+        self.assertTrue(result.startswith("data:image/png;base64,"))
+        self.assertFalse(any("minecraftservices" in u or "api.mojang" in u for u in session.requested))
+        self.assertTrue(any("MHF_Steve" in u for u in session.requested))
 
     async def test_v4_uuid_skips_mojang_lookup(self):
         plugin = make_plugin()

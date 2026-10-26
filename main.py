@@ -2763,18 +2763,30 @@ class MOTDPlugin(Star):
         """使用固定头像源下载玩家头像，失败返回空字符串交给 CSS 占位。"""
         identifier, cache_key = self._player_avatar_identity(player)
         if not identifier:
-            return ""
-        cached = self._avatar_cache.get(cache_key)
-        if cached:
-            return cached
+            # 匿名/无效样本条目：用默认史蒂夫头像兜底展示
+            return await self._download_avatar(session, semaphore, "MHF_Steve", "steve:default")
 
         if cache_key.startswith("name:"):
             resolved = await self._resolve_premium_uuid(session, identifier)
             if resolved == "":
-                # 非正版名无皮肤可查，不拿头像源的默认史蒂夫冒充真人头像
-                return ""
+                # 非正版名查不到皮肤：同样用默认史蒂夫头像兜底
+                return await self._download_avatar(session, semaphore, "MHF_Steve", "steve:default")
             if resolved:
                 identifier = resolved
+
+        return await self._download_avatar(session, semaphore, identifier, cache_key)
+
+    async def _download_avatar(
+        self,
+        session: aiohttp.ClientSession,
+        semaphore: asyncio.Semaphore,
+        identifier: str,
+        cache_key: str,
+    ) -> str:
+        """从固定头像源下载指定标识的头像并写入缓存，失败返回空字符串。"""
+        cached = self._avatar_cache.get(cache_key)
+        if cached:
+            return cached
 
         encoded = quote(identifier, safe="")
         urls = [
