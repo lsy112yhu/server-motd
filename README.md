@@ -4,9 +4,11 @@
 
 > **1.8.0 地址访问规则**：默认仅查询公网地址。内网服需由管理员在 AstrBot WebUI 的「允许查询的内网服务器 IP/网段」中添加精确 IP 或 CIDR。白名单对所有获准使用插件的会话生效；图标下载始终拒绝内网地址。
 
-![插件输出图片效果预览图1](./assets/preview_java.png)
-![插件输出图片效果预览图2](./assets/preview_bedrock.png)
-![插件输出图片效果预览图3](./assets/preview_proxy.png)
+![Hypixel Java 版单服务器查询](./assets/screenshots/java-server.png)
+
+![Galaxite 基岩版单服务器查询](./assets/screenshots/bedrock-server.png)
+
+![三服务器并发查询](./assets/screenshots/multi-server.png)
 
 ---
 
