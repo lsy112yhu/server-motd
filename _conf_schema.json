@@ -1,21 +1,15 @@
 {
     "default_servers": {
-        "description": "默认查询的服务器列表（最多三个）",
+        "description": "全局默认服务器列表（最多三个）",
         "type": "list",
-        "hint": "不带参数使用 /motd 时并发查询这里配置的服务器。使用 /motd set1 <地址>、/motd set2 <地址> 和 /motd set3 <地址> 分别修改。",
+        "hint": "私聊、以及没有专属绑定的群，不带参数使用 /motd 时并发查询这里的服务器。在私聊中用 /motd set1 <地址>、/motd set2 <地址>、/motd set3 <地址> 修改本列表；在群聊中发同样的指令，修改的是该群的专属绑定，见下方【分群服务器列表】。",
         "default": []
     },
-    "default_server": {
-        "description": "旧版默认服务器地址（兼容项）",
-        "type": "string",
-        "hint": "仅用于自动迁移旧配置；请改用默认服务器列表或 /motd set1、/motd set2、/motd set3。",
-        "default": ""
-    },
-    "default_port": {
-        "description": "旧版默认服务器端口（兼容项）",
-        "type": "int",
-        "hint": "仅用于自动迁移旧配置；Java 默认端口为 25565。",
-        "default": 25565
+    "group_servers": {
+        "description": "分群服务器列表（每项一个群）",
+        "type": "list",
+        "hint": "每项一行：群号=服务器1,服务器2,服务器3；例如 123456789=mc.example.com:25565,mc2.example.com。不带参数的 /motd、/在线 自动按群查询，未绑定群使用全局默认列表。在群内可用 /motd set1、/motd set2、/motd set3 按槽位修改本群绑定，/motd remove 清除本群槽位，/motd get 查看本群列表；也可用 /motd group set/show/clear 整表修改（group 指令仅 AstrBot 管理员可用）。未绑定的群首次在群内修改时，会以当时的全局默认列表为起点创建专属绑定。",
+        "default": []
     },
     "enable_all_sessions": {
         "description": "对所有会话生效",
@@ -32,7 +26,7 @@
     "admin_only_config": {
         "description": "仅管理员可修改配置",
         "type": "bool",
-        "hint": "开启后，只有 AstrBot 平台配置中的管理员才能使用 /motd set1、/motd set2、/motd set3 和 /motd get。",
+        "hint": "开启后，只有 AstrBot 平台配置中的管理员才能使用 /motd set1、/motd set2、/motd set3、/motd remove 和 /motd get 修改或查看配置（群聊中作用于本群绑定，私聊中作用于全局默认）。/motd group set/show/clear 始终仅 AstrBot 管理员可用。",
         "default": true
     },
     "query_timeout": {
@@ -53,16 +47,16 @@
         "hint": "默认禁止本机、私网、链路本地等非公网地址。仅管理员在此填写需要开放的精确 IP 或 CIDR，例如 192.168.1.10/32；不接受域名。白名单会对所有允许使用插件的会话生效，请避免开放整个内网。图标下载始终禁止内网地址。",
         "default": []
     },
-    "enable_random_wallpaper": {
-        "description": "启用随机壁纸背景",
-        "type": "bool",
-        "hint": "开启后，插件会在后台从 t.alcy.cc 预下载并压缩壁纸；查询只从本地缓存随机读取，不等待壁纸网站。",
-        "default": true
-    },
     "enable_player_avatars": {
         "description": "显示在线玩家头像",
         "type": "bool",
         "hint": "开启后，Java 版查询会按 UUID 或玩家名获取 Minecraft 皮肤头像；失败时自动使用本地占位，不影响状态卡。",
+        "default": true
+    },
+    "enable_random_wallpaper": {
+        "description": "启用随机壁纸背景",
+        "type": "bool",
+        "hint": "开启后，插件会在后台从 t.alcy.cc 预下载并压缩壁纸；查询只从本地缓存随机读取，不等待壁纸网站。",
         "default": true
     },
     "wallpaper_category": {
@@ -95,12 +89,6 @@
         "hint": "范围 5-60 秒；渲染会优先快速切换一次外部 HTML 节点。全部超时后不发送文本回退，避免一条查询等待数分钟。",
         "default": 20
     },
-    "group_servers": {
-        "description": "分群服务器列表（WebUI 每行添加一个群）",
-        "type": "list",
-        "hint": "每项一行：群号=服务器1,服务器2,服务器3；例如 123456789=mc.example.com:25565,mc2.example.com。不带参数的 /motd、/在线 自动按群查询，未绑定群使用全局默认列表。群内 AstrBot 管理员也可用 /motd group set/show/clear 修改。",
-        "default": []
-    },
     "custom_t2i_endpoints": {
         "description": "自定义图片渲染端点（优先使用）",
         "type": "list",
@@ -124,5 +112,17 @@
         "type": "string",
         "hint": "auto: 插件优先健康端点并在剩余预算内回退；astrbot: 仅使用原版 AstrBot 渲染。",
         "default": "auto"
+    },
+    "default_server": {
+        "description": "旧版默认服务器地址（兼容项）",
+        "type": "string",
+        "hint": "仅用于自动迁移旧配置；请改用全局默认服务器列表，或在私聊中使用 /motd set1 修改全局默认。",
+        "default": ""
+    },
+    "default_port": {
+        "description": "旧版默认服务器端口（兼容项）",
+        "type": "int",
+        "hint": "仅用于自动迁移旧配置；Java 默认端口为 25565。",
+        "default": 25565
     }
 }

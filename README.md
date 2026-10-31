@@ -129,11 +129,11 @@ git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_
 ### 管理员配置指令
 | 指令 | 说明 | 示例 |
 |------|------|------|
-| `/motd set1 <地址>` | 设置第 1 台默认服务器（会先验证连通性） | `/motd set1 server1.example.com` |
-| `/motd set2 <地址>` | 设置第 2 台默认服务器 | `/motd set2 server2.example.com` |
-| `/motd set3 <地址>` | 设置第 3 台默认服务器 | `/motd set3 server3.example.com` |
-| `/motd remove <1\|2\|3>` | 清除指定槽位的默认服务器（配置自动前移） | `/motd remove 1` 或 `/motd del set2` |
-| `/motd get` | 查看当前已保存的默认服务器与配置 | `/motd get` |
+| `/motd set1 <地址>` | 设置第 1 台服务器（会先验证连通性；v1.9.0 起群内发送改本群绑定，私聊改全局默认） | `/motd set1 server1.example.com` |
+| `/motd set2 <地址>` | 设置第 2 台服务器（作用域同上） | `/motd set2 server2.example.com` |
+| `/motd set3 <地址>` | 设置第 3 台服务器（作用域同上） | `/motd set3 server3.example.com` |
+| `/motd remove <1\|2\|3>` | 清除指定槽位的服务器（配置自动前移；作用域同上） | `/motd remove 1` 或 `/motd del set2` |
+| `/motd get` | 查看当前作用域（本群或全局）已保存的服务器与配置 | `/motd get` |
 | `/motd wallpaper status` | 查看壁纸缓存数量与后台预取状态 | `/motd wallpaper status` |
 | `/motd wallpaper refill` | 立即启动一次后台壁纸缓存填充 | `/motd wallpaper refill` |
 | `/motd group set <地址1,地址2>` | 在当前群绑定最多 3 台服务器（仅 AstrBot 管理员） | `/motd group set mc.a.com,mc2.a.com` |
@@ -151,9 +151,11 @@ git clone https://github.com/lsy112yhu/server-motd.git astrbot_plugin_minecraft_
 987654321=play.b.net:25565
 ```
 
-每项一行，一行一个群号，等号后用英文逗号分隔服务器（最多 3 台）。现有 AstrBot 配置 schema 采用列表项输入，**不是分别输入群号和地址的双字段表单**。保存并重新加载插件后生效。群 A 发送 `/motd` 或 `/在线` 返回 A 的服务器，群 B 返回 B 的；未绑定群或私聊仍查询 `default_servers`。显式 `/motd <地址>` 与全局 `set1/2/3` 完全不受影响。`motd-bedrock` 仍沿用全局默认基岩版查询行为。
+每项一行，一行一个群号，等号后用英文逗号分隔服务器（最多 3 台）。现有 AstrBot 配置 schema 采用列表项输入，**不是分别输入群号和地址的双字段表单**。保存并重新加载插件后生效。群 A 发送 `/motd` 或 `/在线` 返回 A 的服务器，群 B 返回 B 的；未绑定群或私聊仍查询 `default_servers`。显式 `/motd <地址>` 不受分群绑定影响。`motd-bedrock` 仍沿用全局默认基岩版查询行为。
 
 还可以由 **AstrBot 管理员** 在对应群直接发送 `/motd group set mc.a.com,mc2.a.com`、`/motd group show`、`/motd group clear`。指令会立即写入同一个配置字段，重启后保持生效。普通群管理员如果不是 AstrBot 管理员，不具有配置权限。当前只支持数字群号，且不区分跨平台的相同群号；如使用多个不同聊天平台，应确保群 ID 不冲突。非法地址在查询时仍受到原有 DNS 私网/allowlist 检查。
+
+**v1.9.0 起 `set1/set2/set3`、`remove`、`get` 改为作用域感知**：在群聊中发送时，读写的是当前群的绑定（槽位、去重与连通性验证规则与全局时相同）；本群尚无绑定时，以当时的全局默认列表为起点创建专属绑定，其余槽位沿用全局默认。在私聊中发送时，行为与此前一致，读写的仍是全局 `default_servers`。在群内把最后一台服务器 `remove` 掉时，本群绑定会被清空并回退使用全局默认。
 
 ## 🖼️ 图片渲染可靠性（v1.8.0）
 
