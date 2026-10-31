@@ -46,7 +46,7 @@ JAVA_DEFAULT_PORT = 25565
 BEDROCK_DEFAULT_PORT = 19132
 
 PLUGIN_NAME = "astrbot_plugin_minecraft_motd"
-PLUGIN_VERSION = "1.8.1"
+PLUGIN_VERSION = "1.9.0"
 WALLPAPER_API_BASE = "https://t.alcy.cc/json"
 WALLPAPER_ALLOWED_HOSTS = {"t.alcy.cc", "tc.alcy.cc"}
 WALLPAPER_ALLOWED_TYPES = {"image/jpeg", "image/png", "image/webp"}
@@ -3012,6 +3012,42 @@ class MOTDPlugin(Star):
             return list(self.default_servers[:3])
         return list(self.default_servers[:1])
 
+    def _config_scope(self, event: AstrMessageEvent):
+        """Scope for set1/set2/set3/remove/get: the current group when in one.
+
+        Returns (group_id, effective_servers, is_bound). In a group chat the
+        effective list is the group's own binding, or the global defaults as
+        the starting point when the group has no binding yet (editing then
+        creates the binding). In private chats group_id is "" and the
+        effective list is the global default list.
+        """
+        try:
+            group_id = valid_group_id(event.get_group_id())
+        except (AttributeError, TypeError):
+            group_id = ""
+        if group_id:
+            bound = self.group_servers.get(group_id)
+            if bound:
+                return group_id, list(bound[:3]), True
+            return group_id, list(self.default_servers[:3]), False
+        return "", list(self.default_servers[:3]), False
+
+    def _persist_group_servers(self, new_groups) -> bool:
+        """Save group_servers rows with rollback; update memory on success."""
+        previous_rows = self.config.get("group_servers", None)
+        self.config["group_servers"] = serialize_group_servers(new_groups)
+        try:
+            self.config.save_config()
+        except Exception as exc:
+            if previous_rows is None:
+                self.config.pop("group_servers", None)
+            else:
+                self.config["group_servers"] = previous_rows
+            logger.error("[MOTD] 分群服务器保存失败: %s", exc)
+            return False
+        self.group_servers = {key: list(values) for key, values in new_groups.items()}
+        return True
+
     async def _render_card(self, template: str, context: Dict[str, Any]):
         """One deadline for both plugin render attempts and framework fallback."""
         if self.render_client_mode == "astrbot":
@@ -3069,25 +3105,14 @@ class MOTDPlugin(Star):
             if not addresses:
                 await event.send(event.plain_result("❌ 未找到有效服务器地址，未保存"))
                 return
-        old_groups = {key: list(values) for key, values in self.group_servers.items()}
-        new_groups = {key: list(values) for key, values in old_groups.items()}
+        new_groups = {key: list(values) for key, values in self.group_servers.items()}
         if action == "clear":
             new_groups.pop(group_id, None)
         else:
             new_groups[group_id] = addresses
-        previous_rows = self.config.get("group_servers", None)
-        self.config["group_servers"] = serialize_group_servers(new_groups)
-        try:
-            self.config.save_config()
-        except Exception as exc:
-            if previous_rows is None:
-                self.config.pop("group_servers", None)
-            else:
-                self.config["group_servers"] = previous_rows
-            logger.error("[MOTD] 分群服务器保存失败: %s", exc)
+        if not self._persist_group_servers(new_groups):
             await event.send(event.plain_result("❌ 配置保存失败，请查看日志"))
             return
-        self.group_servers = new_groups
         await event.send(event.plain_result(
             f"✅ 已{'清除' if action == 'clear' else '保存'}群 {group_id} 的服务器绑定"
         ))
@@ -3377,8 +3402,17 @@ class MOTDPlugin(Star):
             if value:
                 await event.send(event.plain_result("❌ 用法: /motd get"))
                 return
-            lines = [f"  {index}. {address}" for index, address in enumerate(self.default_servers, start=1)]
+            group_id, scope_servers, bound = self._config_scope(event)
+            lines = [f"  {index}. {address}" for index, address in enumerate(scope_servers, start=1)]
             defaults = "\n".join(lines) if lines else "  未设置"
+            if group_id:
+                await event.send(event.plain_result(
+                    f"📋 MOTD 服务器（群 {group_id}）\n"
+                    f"{defaults}\n"
+                    f"生效范围: {'本群专属绑定' if bound else '本群未绑定，以上为全局默认；在本群修改将创建专属绑定'}\n"
+                    f"查询超时: {self.query_timeout} 秒"
+                ))
+                return
             await event.send(event.plain_result(
                 "📋 MOTD 默认服务器\n"
                 f"{defaults}\n"
@@ -3403,15 +3437,35 @@ class MOTDPlugin(Star):
                 return
 
             slot = slot_map[slot_key]
-            if slot >= len(self.default_servers):
+            group_id, scope_servers, _bound = self._config_scope(event)
+            if slot >= len(scope_servers):
                 await event.send(event.plain_result(
-                    f"❌ 默认服务器 {slot + 1} 当前未设置，无需清除"
+                    f"❌ {'本群' if group_id else '默认'}服务器 {slot + 1} 当前未设置，无需清除"
                 ))
                 return
 
-            removed_address = self.default_servers[slot]
-            updated_servers = list(self.default_servers)
+            removed_address = scope_servers[slot]
+            updated_servers = list(scope_servers)
             updated_servers.pop(slot)
+
+            if group_id:
+                new_groups = {key: list(values) for key, values in self.group_servers.items()}
+                if updated_servers:
+                    new_groups[group_id] = updated_servers
+                else:
+                    new_groups.pop(group_id, None)
+                if not self._persist_group_servers(new_groups):
+                    await event.send(event.plain_result("❌ 配置保存失败，请查看 AstrBot 日志"))
+                    return
+                if updated_servers:
+                    lines = [f"  {index}. {address}" for index, address in enumerate(updated_servers, start=1)]
+                    detail = f"当前本群服务器列表 ({len(updated_servers)}/3):\n" + "\n".join(lines)
+                else:
+                    detail = "本群绑定已清空，现回退使用全局默认服务器"
+                await event.send(event.plain_result(
+                    f"✅ 已清除群 {group_id} 服务器 {slot + 1} ({removed_address})\n{detail}"
+                ))
+                return
 
             previous_servers = list(self.default_servers)
             previous_server = self.default_server
@@ -3485,22 +3539,24 @@ class MOTDPlugin(Star):
             if address not in normalized:
                 normalized.append(address)
         slot = 0 if action == "set1" else (1 if action == "set2" else 2)
-        updated_servers = list(self.default_servers[:3])
+        group_id, scope_servers, bound = self._config_scope(event)
+        scope_label = f"群 {group_id} " if group_id else "默认"
+        updated_servers = list(scope_servers[:3])
         if slot == 1 and not updated_servers:
-            await event.send(event.plain_result("❌ 请先使用 /motd set1 <地址> 设置第一个默认服务器"))
+            await event.send(event.plain_result("❌ 请先使用 /motd set1 <地址> 设置第一个服务器"))
             return
         if slot == 2 and len(updated_servers) < 2:
-            await event.send(event.plain_result("❌ 请先设置前两个默认服务器后再设置第三个"))
+            await event.send(event.plain_result("❌ 请先设置前两个服务器后再设置第三个"))
             return
         if slot < len(updated_servers):
             updated_servers[slot] = normalized[0]
         else:
             updated_servers.append(normalized[0])
         if len(set(updated_servers)) != len(updated_servers):
-            await event.send(event.plain_result("❌ 默认服务器地址不能重复"))
+            await event.send(event.plain_result("❌ 服务器地址不能重复"))
             return
 
-        await event.send(event.plain_result(f"🔍 正在验证默认服务器 {slot + 1} ..."))
+        await event.send(event.plain_result(f"🔍 正在验证{scope_label}服务器 {slot + 1} ..."))
 
         async def _validate(address: str):
             host, port = self._parse_server_address(address, True)
@@ -3520,6 +3576,18 @@ class MOTDPlugin(Star):
         if failures:
             await event.send(event.plain_result(
                 "❌ 以下服务器验证失败，未修改配置\n" + "\n".join(failures)
+            ))
+            return
+
+        if group_id:
+            new_groups = {key: list(values) for key, values in self.group_servers.items()}
+            new_groups[group_id] = list(updated_servers)
+            if not self._persist_group_servers(new_groups):
+                await event.send(event.plain_result("❌ 配置保存失败，请查看 AstrBot 日志"))
+                return
+            note = "" if bound else "\n（已为本群创建专属绑定，其余槽位沿用当时的全局默认）"
+            await event.send(event.plain_result(
+                f"✅ 群 {group_id} 服务器 {slot + 1} 已更新\n  {normalized[0]}{note}"
             ))
             return
 
